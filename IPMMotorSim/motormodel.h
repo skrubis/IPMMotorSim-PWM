@@ -41,6 +41,8 @@ public:
     void setPosition(double val) {m_Position = (val * m_Poles);}
     void setSamplingPoint(double val) {m_samplingPoint = val;}
     void setRoadGradient(double val) {m_RoadGradient = val;}
+    void setMotorFrequency(double hz);
+    void setMotorRpm(double rpm);
     double getMotorPosition(void);
     double getElecPosition(void);
     double getMotorFreq(void) {return m_Frequency;}

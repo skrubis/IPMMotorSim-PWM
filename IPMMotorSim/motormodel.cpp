@@ -42,6 +42,20 @@ void MotorModel::Restart(void)
     m_Torque = 0;
 }
 
+void MotorModel::setMotorFrequency(double hz)
+{
+    m_Frequency = hz;
+    if (m_Ratio > 0 && m_WheelSize > 0)
+        m_Speed = (m_Frequency * 2.0 * M_PI * m_WheelSize) / m_Ratio;
+    else
+        m_Speed = 0;
+}
+
+void MotorModel::setMotorRpm(double rpm)
+{
+    setMotorFrequency(rpm / 60.0);
+}
+
 void MotorModel::Step(double Va, double Vb, double Vc)
 {
     (void)Vc;

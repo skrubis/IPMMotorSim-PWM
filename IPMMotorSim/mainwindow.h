@@ -159,6 +159,13 @@ private slots:
     void on_cb_PowTorqTime_toggled(bool checked);
 
     void on_cb_Pwm_toggled(bool checked);
+    void on_cb_PwmZeroSeq_toggled(bool checked);
+    void on_cb_PwmClamp_toggled(bool checked);
+    void on_cb_PwmTiming_toggled(bool checked);
+    void on_cb_PwmSector_toggled(bool checked);
+    void on_startRpm_editingFinished();
+    void on_modBlend_editingFinished();
+    void on_modBlendSlider_valueChanged(int value);
 
     void on_rb_Speed_toggled(bool checked);
 

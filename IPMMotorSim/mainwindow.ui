@@ -403,6 +403,134 @@
         </property>
        </widget>
       </item>
+      <item row="10" column="0">
+       <widget class="QLabel" name="labelStartRpm">
+        <property name="text">
+         <string>Start RPM</string>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="1">
+       <widget class="QLineEdit" name="startRpm">
+        <property name="text">
+         <string>0</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </widget>
+   <widget class="QGroupBox" name="groupBox_modulation">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>560</y>
+      <width>391</width>
+      <height>120</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>Modulation (DPWM)</string>
+    </property>
+    <widget class="QWidget" name="formLayoutWidget_mod">
+     <property name="geometry">
+      <rect>
+       <x>0</x>
+       <y>20</y>
+       <width>391</width>
+       <height>100</height>
+      </rect>
+     </property>
+     <layout class="QFormLayout" name="formLayout_mod">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelModulationMode">
+        <property name="text">
+         <string>Mode</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="modulationMode">
+        <item>
+         <property name="text">
+          <string>Firmware</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>SVPWM</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWMMIN</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWMMAX</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWM0</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWM1</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelModBlend">
+        <property name="text">
+         <string>Blend (0-1)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="modBlend">
+        <property name="text">
+         <string>1.0</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelModBlendSlider">
+        <property name="text">
+         <string>Blend Slider</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <layout class="QHBoxLayout" name="layoutModBlend">
+        <item>
+         <widget class="QSlider" name="modBlendSlider">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="minimum">
+           <number>0</number>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="value">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="modBlendValue">
+          <property name="text">
+           <string>1.000</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
      </layout>
     </widget>
    </widget>
@@ -722,7 +850,7 @@
       <x>410</x>
       <y>370</y>
       <width>241</width>
-      <height>290</height>
+      <height>370</height>
      </rect>
     </property>
     <property name="title">
@@ -734,7 +862,7 @@
       <x>0</x>
       <y>20</y>
       <width>242</width>
-      <height>270</height>
+      <height>350</height>
      </rect>
     </property>
      <layout class="QFormLayout" name="formLayout_3">
@@ -853,13 +981,6 @@
         </item>
        </layout>
       </item>
-      <item row="9" column="0">
-       <widget class="QCheckBox" name="cb_LogCsv">
-        <property name="text">
-         <string>Log CSV</string>
-        </property>
-       </widget>
-      </item>
       <item row="1" column="1">
        <layout class="QHBoxLayout" name="horizontalLayout_3">
         <item>
@@ -909,10 +1030,45 @@
         </property>
        </widget>
       </item>
+      <item row="9" column="0">
+       <widget class="QCheckBox" name="cb_PwmZeroSeq">
+        <property name="text">
+         <string>PWM Zero-Seq</string>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="0">
+       <widget class="QCheckBox" name="cb_PwmClamp">
+        <property name="text">
+         <string>PWM Clamp Leg</string>
+        </property>
+       </widget>
+      </item>
+      <item row="11" column="0">
+       <widget class="QCheckBox" name="cb_PwmTiming">
+        <property name="text">
+         <string>PWM Timing (T1/T2/T0)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="12" column="0">
+       <widget class="QCheckBox" name="cb_PwmSector">
+        <property name="text">
+         <string>PWM Sector</string>
+        </property>
+       </widget>
+      </item>
       <item row="8" column="1">
        <widget class="QCheckBox" name="cb_Efficiency">
         <property name="text">
          <string>Efficiency</string>
+        </property>
+       </widget>
+      </item>
+      <item row="13" column="0">
+       <widget class="QCheckBox" name="cb_LogCsv">
+        <property name="text">
+         <string>Log CSV</string>
         </property>
        </widget>
       </item>

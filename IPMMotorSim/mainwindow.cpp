@@ -22,8 +22,10 @@
 #include <algorithm>
 #include <QtMath>
 #include <QDateTime>
+#include <QDoubleValidator>
 #include <QDir>
 #include <QFile>
+#include <QIntValidator>
 #include <QLocale>
 #include <QRandomGenerator>
 #include <QSettings>
@@ -83,6 +85,14 @@
 #define PWM_C 3
 #define PWM_MIN 4
 #define PWM_MAX 5
+#define PWM_ZEROSEQ 6
+#define PWM_CLAMP_A 7
+#define PWM_CLAMP_B 8
+#define PWM_CLAMP_C 9
+#define PWM_T1 10
+#define PWM_T2 11
+#define PWM_T0 12
+#define PWM_SECTOR 13
 
 //Power/Torque graph
 #define POWER 6
@@ -128,10 +138,27 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->AddNoise->objectName())) ui->AddNoise->setChecked(settings.value(ui->AddNoise->objectName()).toBool());
     if(settings.contains(ui->NoiseAmp->objectName())) ui->NoiseAmp->setText(settings.value(ui->NoiseAmp->objectName(),QString()).toString());
     if(settings.contains(ui->runTime->objectName())) ui->runTime->setText(settings.value(ui->runTime->objectName(),QString()).toString());
+    if(settings.contains(ui->startRpm->objectName())) ui->startRpm->setText(settings.value(ui->startRpm->objectName(),QString()).toString());
+    if(settings.contains(ui->modBlend->objectName())) ui->modBlend->setText(settings.value(ui->modBlend->objectName(),QString()).toString());
     if(settings.contains(ui->RoadGradient->objectName())) ui->RoadGradient->setText(settings.value(ui->RoadGradient->objectName(),QString()).toString());
     if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
     if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
     if(settings.contains(ui->cb_LogCsv->objectName())) ui->cb_LogCsv->setChecked(settings.value(ui->cb_LogCsv->objectName()).toBool());
+    if(settings.contains(ui->cb_PwmZeroSeq->objectName())) ui->cb_PwmZeroSeq->setChecked(settings.value(ui->cb_PwmZeroSeq->objectName()).toBool());
+    if(settings.contains(ui->cb_PwmClamp->objectName())) ui->cb_PwmClamp->setChecked(settings.value(ui->cb_PwmClamp->objectName()).toBool());
+    if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
+    if(settings.contains(ui->cb_PwmSector->objectName())) ui->cb_PwmSector->setChecked(settings.value(ui->cb_PwmSector->objectName()).toBool());
+    if(settings.contains(ui->modulationMode->objectName()))
+        ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
+
+    ui->startRpm->setValidator(new QIntValidator(-20000, 20000, ui->startRpm));
+    QDoubleValidator *blendValidator = new QDoubleValidator(0.0, 1.0, 3, ui->modBlend);
+    blendValidator->setNotation(QDoubleValidator::StandardNotation);
+    ui->modBlend->setValidator(blendValidator);
+
+    ui->modBlendSlider->setRange(0, 100);
+    ui->modBlendSlider->setValue(static_cast<int>(ui->modBlend->text().toDouble() * 100.0));
+    ui->modBlendValue->setText(QString::number(ui->modBlend->text().toDouble(), 'f', 3));
 
     motorGraph = new DataGraph("motor", this);
     simulationGraph = new DataGraph("sim", this);
@@ -256,20 +283,48 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->cb_MotVolt->objectName())) ui->cb_MotVolt->setChecked(settings.value(ui->cb_MotVolt->objectName()).toBool());
 
     pwmGraph->setWindowTitle("PWM Modulation");
-    pwmGraph->setAxisText("Time (s)", "Duty", "");
+    pwmGraph->setAxisText("Time (s)", "Duty", "Diag");
     pwmGraph->addSeries("Duty A", left, PWM_A);
-    pwmGraph->setColour(Qt::red, PWM_A);
+    pwmGraph->setColour(QColor(0xE6, 0x9F, 0x00), PWM_A);
     pwmGraph->addSeries("Duty B", left, PWM_B);
-    pwmGraph->setColour(Qt::green, PWM_B);
+    pwmGraph->setColour(QColor(0x56, 0xB4, 0xE9), PWM_B);
     pwmGraph->addSeries("Duty C", left, PWM_C);
-    pwmGraph->setColour(Qt::blue, PWM_C);
+    pwmGraph->setColour(QColor(0x00, 0x9E, 0x73), PWM_C);
     pwmGraph->addSeries("Duty Min", left, PWM_MIN);
-    pwmGraph->setColour(Qt::darkGray, PWM_MIN);
+    pwmGraph->setColour(QColor(0x99, 0x99, 0x99), PWM_MIN);
     pwmGraph->setOpacity(0.6, PWM_MIN);
     pwmGraph->addSeries("Duty Max", left, PWM_MAX);
-    pwmGraph->setColour(Qt::darkGray, PWM_MAX);
+    pwmGraph->setColour(Qt::black, PWM_MAX);
     pwmGraph->setOpacity(0.6, PWM_MAX);
+    pwmGraph->addSeries("Zero Seq", right, PWM_ZEROSEQ);
+    pwmGraph->setColour(QColor(0xCC, 0x79, 0xA7), PWM_ZEROSEQ);
+    pwmGraph->setOpacity(0.6, PWM_ZEROSEQ);
+    pwmGraph->addSeries("Clamp A", right, PWM_CLAMP_A);
+    pwmGraph->setColour(QColor(0xD5, 0x5E, 0x00), PWM_CLAMP_A);
+    pwmGraph->setOpacity(0.6, PWM_CLAMP_A);
+    pwmGraph->addSeries("Clamp B", right, PWM_CLAMP_B);
+    pwmGraph->setColour(QColor(0x00, 0x72, 0xB2), PWM_CLAMP_B);
+    pwmGraph->setOpacity(0.6, PWM_CLAMP_B);
+    pwmGraph->addSeries("Clamp C", right, PWM_CLAMP_C);
+    pwmGraph->setColour(QColor(0xF0, 0xE4, 0x42), PWM_CLAMP_C);
+    pwmGraph->setOpacity(0.6, PWM_CLAMP_C);
+    pwmGraph->addSeries("T1", left, PWM_T1);
+    pwmGraph->setColour(QColor(0x8E, 0x44, 0xAD), PWM_T1);
+    pwmGraph->setOpacity(0.6, PWM_T1);
+    pwmGraph->addSeries("T2", left, PWM_T2);
+    pwmGraph->setColour(QColor(0x16, 0xA0, 0x85), PWM_T2);
+    pwmGraph->setOpacity(0.6, PWM_T2);
+    pwmGraph->addSeries("T0", left, PWM_T0);
+    pwmGraph->setColour(QColor(0xC0, 0x39, 0x2B), PWM_T0);
+    pwmGraph->setOpacity(0.6, PWM_T0);
+    pwmGraph->addSeries("Sector", right, PWM_SECTOR);
+    pwmGraph->setColour(QColor(0x7F, 0x7F, 0x7F), PWM_SECTOR);
+    pwmGraph->setOpacity(0.6, PWM_SECTOR);
     if(settings.contains(ui->cb_Pwm->objectName())) ui->cb_Pwm->setChecked(settings.value(ui->cb_Pwm->objectName()).toBool());
+    on_cb_PwmZeroSeq_toggled(ui->cb_PwmZeroSeq->isChecked());
+    on_cb_PwmClamp_toggled(ui->cb_PwmClamp->isChecked());
+    on_cb_PwmTiming_toggled(ui->cb_PwmTiming->isChecked());
+    on_cb_PwmSector_toggled(ui->cb_PwmSector->isChecked());
 
     idigGraph->setWindowTitle("Operating Point");
     idigGraph->setAxisText("Id (A)", "Iq (A)", "");
@@ -364,14 +419,21 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->AddNoise->objectName(), ui->AddNoise->isChecked());
     settings.setValue(ui->NoiseAmp->objectName(), ui->NoiseAmp->text());
     settings.setValue(ui->runTime->objectName(), ui->runTime->text());
+    settings.setValue(ui->startRpm->objectName(), ui->startRpm->text());
+    settings.setValue(ui->modBlend->objectName(), ui->modBlend->text());
     settings.setValue(ui->ThrotRamps->objectName(), ui->ThrotRamps->isChecked());
     settings.setValue(ui->RoadGradient->objectName(), ui->RoadGradient->text());
+    settings.setValue(ui->modulationMode->objectName(), ui->modulationMode->currentIndex());
 
     settings.setValue(ui->cb_ContCurr->objectName(), ui->cb_ContCurr->isChecked());
     settings.setValue(ui->cb_ContVolt->objectName(), ui->cb_ContVolt->isChecked());
     settings.setValue(ui->cb_MotCurr->objectName(), ui->cb_MotCurr->isChecked());
     settings.setValue(ui->cb_MotVolt->objectName(), ui->cb_MotVolt->isChecked());
     settings.setValue(ui->cb_Pwm->objectName(), ui->cb_Pwm->isChecked());
+    settings.setValue(ui->cb_PwmZeroSeq->objectName(), ui->cb_PwmZeroSeq->isChecked());
+    settings.setValue(ui->cb_PwmClamp->objectName(), ui->cb_PwmClamp->isChecked());
+    settings.setValue(ui->cb_PwmTiming->objectName(), ui->cb_PwmTiming->isChecked());
+    settings.setValue(ui->cb_PwmSector->objectName(), ui->cb_PwmSector->isChecked());
     settings.setValue(ui->cb_OpPoint->objectName(), ui->cb_OpPoint->isChecked());
     settings.setValue(ui->cb_PowTorqTime->objectName(), ui->cb_PowTorqTime->isChecked());
     settings.setValue(ui->cb_Simulation->objectName(), ui->cb_Simulation->isChecked());
@@ -406,6 +468,20 @@ void MainWindow::runFor(int num_steps)
     sim::Controller controller;
     sim::Modulator modulator;
     sim::InverterSwitchingModel inverter;
+    sim::ModulationMode modMode = sim::ModulationMode::Firmware;
+    const int modIndex = ui->modulationMode->currentIndex();
+    switch(modIndex)
+    {
+        case 1: modMode = sim::ModulationMode::SVPWM; break;
+        case 2: modMode = sim::ModulationMode::DPWMMIN; break;
+        case 3: modMode = sim::ModulationMode::DPWMMAX; break;
+        case 4: modMode = sim::ModulationMode::DPWM0; break;
+        case 5: modMode = sim::ModulationMode::DPWM1; break;
+        default: modMode = sim::ModulationMode::Firmware; break;
+    }
+    const QString modModeStr = ui->modulationMode->currentText();
+    double modBlend = ui->modBlend->text().toDouble();
+    modBlend = std::clamp(modBlend, 0.0, 1.0);
 
     if(num_steps<0)
         return;
@@ -414,7 +490,8 @@ void MainWindow::runFor(int num_steps)
     QList<QPointF> listMFreq, listMPos, listContMPos;
     QList<QPointF> listCVa, listCVb, listCVc, listCVq, listCVd, listCIq, listCId, listCifw;//, listCivlim;
     QList<QPointF> listVVd, listVVq, listVVq_bemf, listVVq_dueto_id, listVVd_dueto_iq, listVVq_dueto_Rq, listVVd_dueto_Rd, listVVLd, listVVLq;
-    QList<QPointF> listPwmA, listPwmB, listPwmC, listPwmMin, listPwmMax;
+    QList<QPointF> listPwmA, listPwmB, listPwmC, listPwmMin, listPwmMax, listPwmZero, listClampA, listClampB, listClampC;
+    QList<QPointF> listPwmT1, listPwmT2, listPwmT0, listPwmSector;
     QList<QPointF> listIdIq;
     QList<QPointF> listPower, listTorque, listElecPower, listEfficiency;
 
@@ -445,6 +522,8 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# loop_freq_hz=" << (m_timestep > 0 ? (1.0 / m_timestep) : 0.0) << "\n";
                 logStream << "# pwmfrq_param=" << Param::GetInt(Param::pwmfrq) << " (" << PWMFRQS << ")\n";
                 logStream << "# vdc=" << m_Vdc << "\n";
+                logStream << "# modulation_mode=" << modModeStr << "\n";
+                logStream << "# modulation_blend=" << modBlend << "\n";
                 logStream << "# motor_ld=" << m_Ld << ", motor_lq=" << m_Lq << ", rs=" << m_Rs
                           << ", poles=" << m_Poles << ", fluxlinkage=" << m_fluxLinkage << "\n";
                 logStream << "# sampling_point=" << m_samplingPoint << ", sync_delay_s=" << m_syncdelay
@@ -454,7 +533,8 @@ void MainWindow::runFor(int num_steps)
                           << "va_cmd,vb_cmd,vc_cmd,va,vb,vc,"
                           << "ia,ib,ic,id,iq,"
                           << "id_ctrl,iq_ctrl,ifw,vd_ctrl,vq_ctrl,"
-                          << "theta_e_deg,rpm,torque_nm,power_w\n";
+                          << "theta_e_deg,rpm,torque_nm,power_w,"
+                          << "mod_mode,mod_blend,sector,t1,t2,t0,zero_seq,clamp_leg,clamp_pol\n";
                 statusBar()->showMessage(QString("Logging to %1").arg(logPath), 5000);
             }
             else
@@ -519,7 +599,8 @@ void MainWindow::runFor(int num_steps)
         controller.Run();
 
         pwmEnabled = controller.PwmEnabled();
-        sim::DutyCycles duty = modulator.GetDutyCycles();
+        sim::DutyCycles duty;
+        sim::ModulatorDiag modDiag{};
         sim::PhaseVoltages voltages;
         if(!pwmEnabled) //needed to allow OpenInverter initialisation to complete
         {
@@ -527,7 +608,23 @@ void MainWindow::runFor(int num_steps)
         }
         else
         {
-            voltages = inverter.FromDuty(m_Vdc, duty);
+            const double theta = qDegreesToRadians(motor->getElecPosition());
+            const double vd_ctrl = controller.UdVolts(m_Vdc);
+            const double vq_ctrl = controller.UqVolts(m_Vdc);
+            const double v_alpha = (vd_ctrl * qCos(theta)) - (vq_ctrl * qSin(theta));
+            const double v_beta = (vd_ctrl * qSin(theta)) + (vq_ctrl * qCos(theta));
+
+            if(modMode == sim::ModulationMode::Firmware)
+            {
+                duty = modulator.GetDutyCycles();
+                voltages = inverter.FromDuty(m_Vdc, duty);
+                modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, sim::ModulationMode::SVPWM, modBlend, &modDiag);
+            }
+            else
+            {
+                duty = modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, modMode, modBlend, &modDiag);
+                voltages = inverter.FromDuty(m_Vdc, duty);
+            }
         }
 
         Va = voltages.a;
@@ -547,6 +644,39 @@ void MainWindow::runFor(int num_steps)
             const double dutyMax = std::max(duty.a_norm, std::max(duty.b_norm, duty.c_norm));
             listPwmMin.append(QPointF(m_time, dutyMin));
             listPwmMax.append(QPointF(m_time, dutyMax));
+            double zeroSeq = modDiag.zero_seq;
+            listPwmZero.append(QPointF(m_time, zeroSeq));
+
+            double clampA = 0.0, clampB = 0.0, clampC = 0.0;
+            if(modDiag.clamp_leg >= 0)
+            {
+                if(modDiag.clamp_leg == 0) clampA = modDiag.clamp_polarity;
+                if(modDiag.clamp_leg == 1) clampB = modDiag.clamp_polarity;
+                if(modDiag.clamp_leg == 2) clampC = modDiag.clamp_polarity;
+            }
+            else
+            {
+                const double eps = 1e-4;
+                auto clampVal = [eps](double d)
+                {
+                    if(d <= eps)
+                        return -1.0;
+                    if(d >= (1.0 - eps))
+                        return 1.0;
+                    return 0.0;
+                };
+                clampA = clampVal(duty.a_norm);
+                clampB = clampVal(duty.b_norm);
+                clampC = clampVal(duty.c_norm);
+            }
+            listClampA.append(QPointF(m_time, clampA));
+            listClampB.append(QPointF(m_time, clampB));
+            listClampC.append(QPointF(m_time, clampC));
+
+            listPwmT1.append(QPointF(m_time, modDiag.t1));
+            listPwmT2.append(QPointF(m_time, modDiag.t2));
+            listPwmT0.append(QPointF(m_time, modDiag.t0));
+            listPwmSector.append(QPointF(m_time, modDiag.sector));
         }
 
         //add voltages to plot here so that we see the SVM waveforms
@@ -632,6 +762,7 @@ void MainWindow::runFor(int num_steps)
             const double vd_ctrl = controller.UdVolts(m_Vdc);
             const double vq_ctrl = controller.UqVolts(m_Vdc);
             const double rpm = motor->getMotorFreq() * 60.0;
+            const double zero_seq_log = modDiag.zero_seq;
             logStream << m_time << "," << i << "," << (pwmEnabled ? 1 : 0) << "," << m_Vdc << ","
                       << duty.a_norm << "," << duty.b_norm << "," << duty.c_norm << ","
                       << Va_cmd << "," << Vb_cmd << "," << Vc_cmd << ","
@@ -640,7 +771,9 @@ void MainWindow::runFor(int num_steps)
                       << motor->getId() << "," << motor->getIq() << ","
                       << controller.Id() << "," << controller.Iq() << "," << controller.Ifw() << ","
                       << vd_ctrl << "," << vq_ctrl << ","
-                      << motor->getElecPosition() << "," << rpm << "," << motor->getTorque() << "," << motor->getPower()
+                      << motor->getElecPosition() << "," << rpm << "," << motor->getTorque() << "," << motor->getPower() << ","
+                      << modModeStr << "," << modBlend << "," << modDiag.sector << "," << modDiag.t1 << "," << modDiag.t2 << "," << modDiag.t0 << ","
+                      << zero_seq_log << "," << modDiag.clamp_leg << "," << modDiag.clamp_polarity
                       << "\n";
         }
 
@@ -704,6 +837,14 @@ void MainWindow::runFor(int num_steps)
     pwmGraph->addDataPoints(listPwmC, PWM_C);
     pwmGraph->addDataPoints(listPwmMin, PWM_MIN);
     pwmGraph->addDataPoints(listPwmMax, PWM_MAX);
+    pwmGraph->addDataPoints(listPwmZero, PWM_ZEROSEQ);
+    pwmGraph->addDataPoints(listClampA, PWM_CLAMP_A);
+    pwmGraph->addDataPoints(listClampB, PWM_CLAMP_B);
+    pwmGraph->addDataPoints(listClampC, PWM_CLAMP_C);
+    pwmGraph->addDataPoints(listPwmT1, PWM_T1);
+    pwmGraph->addDataPoints(listPwmT2, PWM_T2);
+    pwmGraph->addDataPoints(listPwmT0, PWM_T0);
+    pwmGraph->addDataPoints(listPwmSector, PWM_SECTOR);
 
     idigGraph->addDataPoints(listIdIq, IDIQAMPS);
 
@@ -829,6 +970,9 @@ void MainWindow::on_pbRestart_clicked()
     testStubsClearEncoder();
     m_time = 0;
     motor->Restart();
+    on_startRpm_editingFinished();
+    on_modBlend_editingFinished();
+    motor->setMotorRpm(ui->startRpm->text().toDouble());
     motorGraph->clearData();
     simulationGraph->clearData();
     controllerGraph->clearData();
@@ -1013,6 +1157,40 @@ void MainWindow::on_cb_Pwm_toggled(bool checked)
         pwmGraph->hide();
 }
 
+void MainWindow::on_cb_PwmZeroSeq_toggled(bool checked)
+{
+    pwmGraph->setOpacity(checked ? 0.6 : 0.0, PWM_ZEROSEQ);
+    if(ui->cb_Pwm->isChecked())
+        pwmGraph->updateGraph();
+}
+
+void MainWindow::on_cb_PwmClamp_toggled(bool checked)
+{
+    const qreal opacity = checked ? 0.6 : 0.0;
+    pwmGraph->setOpacity(opacity, PWM_CLAMP_A);
+    pwmGraph->setOpacity(opacity, PWM_CLAMP_B);
+    pwmGraph->setOpacity(opacity, PWM_CLAMP_C);
+    if(ui->cb_Pwm->isChecked())
+        pwmGraph->updateGraph();
+}
+
+void MainWindow::on_cb_PwmTiming_toggled(bool checked)
+{
+    const qreal opacity = checked ? 0.6 : 0.0;
+    pwmGraph->setOpacity(opacity, PWM_T1);
+    pwmGraph->setOpacity(opacity, PWM_T2);
+    pwmGraph->setOpacity(opacity, PWM_T0);
+    if(ui->cb_Pwm->isChecked())
+        pwmGraph->updateGraph();
+}
+
+void MainWindow::on_cb_PwmSector_toggled(bool checked)
+{
+    pwmGraph->setOpacity(checked ? 0.6 : 0.0, PWM_SECTOR);
+    if(ui->cb_Pwm->isChecked())
+        pwmGraph->updateGraph();
+}
+
 void MainWindow::on_cb_PowTorqTime_toggled(bool checked)
 {
     if(checked)
@@ -1047,6 +1225,35 @@ void MainWindow::on_runTime_editingFinished()
         m_runTime = 1;
     if(m_runTime>60)
         m_runTime = 60;
+}
+
+void MainWindow::on_startRpm_editingFinished()
+{
+    bool ok = false;
+    double rpm = ui->startRpm->text().toDouble(&ok);
+    if(!ok)
+        rpm = 0.0;
+    rpm = std::clamp(rpm, -20000.0, 20000.0);
+    ui->startRpm->setText(QString::number(rpm, 'f', 0));
+}
+
+void MainWindow::on_modBlend_editingFinished()
+{
+    bool ok = false;
+    double blend = ui->modBlend->text().toDouble(&ok);
+    if(!ok)
+        blend = 1.0;
+    blend = std::clamp(blend, 0.0, 1.0);
+    ui->modBlend->setText(QString::number(blend, 'f', 3));
+    ui->modBlendSlider->setValue(static_cast<int>(blend * 100.0));
+    ui->modBlendValue->setText(QString::number(blend, 'f', 3));
+}
+
+void MainWindow::on_modBlendSlider_valueChanged(int value)
+{
+    double blend = std::clamp(value / 100.0, 0.0, 1.0);
+    ui->modBlend->setText(QString::number(blend, 'f', 3));
+    ui->modBlendValue->setText(QString::number(blend, 'f', 3));
 }
 
 void MainWindow::on_VLimMargin_editingFinished()
