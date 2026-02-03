@@ -45,6 +45,7 @@ private:
     DataGraph *debugGraph;
     DataGraph *voltageGraph;
     DataGraph *pwmGraph;
+    DataGraph *lossGraph;
     IdIqGraph *idigGraph;
     DataGraph *powerGraph;
     sim::MotorPlant *motor;
@@ -163,10 +164,14 @@ private slots:
     void on_cb_PwmClamp_toggled(bool checked);
     void on_cb_PwmTiming_toggled(bool checked);
     void on_cb_PwmSector_toggled(bool checked);
+    void on_cb_Losses_toggled(bool checked);
     void on_startRpm_editingFinished();
     void on_modBlend_editingFinished();
     void on_modBlendSlider_valueChanged(int value);
     void on_cb_ShowLegends_toggled(bool checked);
+    void on_deadtimeUs_editingFinished();
+    void on_sinkTemp_editingFinished();
+    void on_thermalTau_editingFinished();
 
     void on_rb_Speed_toggled(bool checked);
 

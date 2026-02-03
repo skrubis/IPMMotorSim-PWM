@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>660</width>
-    <height>692</height>
+    <height>980</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -532,9 +532,281 @@
        </layout>
       </item>
      </layout>
+   </widget>
+  </widget>
+  <widget class="QGroupBox" name="groupBox_powerstage">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>690</y>
+     <width>391</width>
+     <height>250</height>
+    </rect>
+   </property>
+   <property name="title">
+    <string>Power Stage</string>
+   </property>
+   <widget class="QTabWidget" name="powerStageTabs">
+    <property name="geometry">
+     <rect>
+      <x>0</x>
+      <y>20</y>
+      <width>391</width>
+      <height>220</height>
+     </rect>
+    </property>
+    <widget class="QWidget" name="tabPowerBasics">
+     <attribute name="title">
+      <string>Basics</string>
+     </attribute>
+     <layout class="QFormLayout" name="formLayout_power_basics">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelDeadtimeUs">
+        <property name="text">
+         <string>Deadtime (us)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="deadtimeUs">
+        <property name="text">
+         <string>2.0</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelSinkTemp">
+        <property name="text">
+         <string>Sink Temp (C)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="sinkTemp">
+        <property name="text">
+         <string>25</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelThermalTau">
+        <property name="text">
+         <string>Thermal Tau (s)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="thermalTau">
+        <property name="text">
+         <string>1.0</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelVref">
+        <property name="text">
+         <string>Vref (V)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLineEdit" name="vrefV">
+        <property name="text">
+         <string>300</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+      <widget class="QLabel" name="labelKv">
+       <property name="text">
+        <string>kV (E~V^k)</string>
+       </property>
+      </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QLineEdit" name="kvExp">
+        <property name="text">
+         <string>1.0</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+    <widget class="QWidget" name="tabPowerConduction">
+     <attribute name="title">
+      <string>Conduction</string>
+     </attribute>
+     <layout class="QFormLayout" name="formLayout_power_cond">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelDiodeVf25">
+        <property name="text">
+         <string>Diode Vf 25C (V)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="diodeVf25">
+        <property name="text">
+         <string>2.2</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelDiodeVf125">
+        <property name="text">
+         <string>Diode Vf 125C (V)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="diodeVf125">
+        <property name="text">
+         <string>2.2</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelVcePoints">
+        <property name="text">
+         <string>Vce(sat) points (I, V25, V125)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QPlainTextEdit" name="vcePoints">
+        <property name="plainText">
+         <string>50, 1.29, 1.11
+100, 1.37, 1.24
+200, 1.50, 1.41
+300, 1.60, 1.54</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+    <widget class="QWidget" name="tabPowerSwitching">
+     <attribute name="title">
+      <string>Switching</string>
+     </attribute>
+     <layout class="QFormLayout" name="formLayout_power_sw">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelEonPoints">
+        <property name="text">
+         <string>Eon points (I, 25C, 125C) mJ</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QPlainTextEdit" name="eonPoints">
+        <property name="plainText">
+         <string>100, 3.72, 4.64
+200, 6.37, 7.22
+300, 7.80, 8.80</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelEoffPoints">
+        <property name="text">
+         <string>Eoff points (I, 25C, 125C) mJ</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QPlainTextEdit" name="eoffPoints">
+        <property name="plainText">
+         <string>100, 1.04, 2.37
+200, 3.91, 6.13
+300, 8.33, 11.44</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelIrrPoints">
+        <property name="text">
+         <string>Irr points (I, 25C, 125C) A</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QPlainTextEdit" name="irrPoints">
+        <property name="plainText">
+         <string>100, 31.6, 85.6
+200, 72.5, 109.4
+300, 82.5, 128.5</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelTrrPoints">
+        <property name="text">
+         <string>trr points (I, 25C, 125C) us</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QPlainTextEdit" name="trrPoints">
+        <property name="plainText">
+         <string>100, 0.120, 0.245
+200, 0.115, 0.195
+300, 0.115, 0.195</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+    <widget class="QWidget" name="tabPowerThermal">
+     <attribute name="title">
+      <string>Thermals</string>
+     </attribute>
+     <layout class="QFormLayout" name="formLayout_power_th">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelRthJcIgbt">
+        <property name="text">
+         <string>Rth jc IGBT (C/W)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="rthJcIgbt">
+        <property name="text">
+         <string>0.16</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelRthJcDiode">
+        <property name="text">
+         <string>Rth jc Diode (C/W)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="rthJcDiode">
+        <property name="text">
+         <string>0.25</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelRthCs">
+        <property name="text">
+         <string>Rth case-sink (C/W)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="rthCs">
+        <property name="text">
+         <string>0.023</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </widget>
-   <widget class="QGroupBox" name="groupBox_4">
+  </widget>
+  <widget class="QGroupBox" name="groupBox_4">
     <property name="geometry">
      <rect>
       <x>200</x>
@@ -844,15 +1116,15 @@
      </layout>
     </widget>
    </widget>
-   <widget class="QGroupBox" name="groupBox_3">
-    <property name="geometry">
-     <rect>
-      <x>410</x>
-      <y>370</y>
-      <width>241</width>
-      <height>390</height>
-     </rect>
-    </property>
+  <widget class="QGroupBox" name="groupBox_3">
+   <property name="geometry">
+    <rect>
+     <x>410</x>
+     <y>370</y>
+     <width>241</width>
+     <height>420</height>
+    </rect>
+   </property>
     <property name="title">
      <string>Window Visibility</string>
     </property>
@@ -862,7 +1134,7 @@
       <x>0</x>
       <y>20</y>
       <width>242</width>
-      <height>370</height>
+      <height>400</height>
      </rect>
     </property>
      <layout class="QFormLayout" name="formLayout_3">
@@ -1079,6 +1351,13 @@
        <widget class="QCheckBox" name="cb_LogCsv">
         <property name="text">
          <string>Log CSV</string>
+        </property>
+       </widget>
+      </item>
+      <item row="14" column="0">
+       <widget class="QCheckBox" name="cb_Losses">
+        <property name="text">
+         <string>Inverter Losses</string>
         </property>
        </widget>
       </item>

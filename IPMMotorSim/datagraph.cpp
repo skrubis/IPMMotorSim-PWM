@@ -22,6 +22,7 @@
 #include <QtCore/QtMath>
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
+#include <QVBoxLayout>
 #include <QSettings>
 #include <limits>
 
@@ -43,6 +44,19 @@ DataGraph::DataGraph(QString name, QWidget *parent) : QMainWindow(parent)
     m_chartView = new ChartView(m_chart);
     m_chartView->setRenderHint(QPainter::Antialiasing);
 
+    QWidget *container = new QWidget(this);
+    QVBoxLayout *layout = new QVBoxLayout(container);
+    layout->setContentsMargins(6, 4, 6, 6);
+    layout->setSpacing(2);
+    m_infoLabel = new QLabel(container);
+    QFont infoFont = m_infoLabel->font();
+    infoFont.setPointSizeF(infoFont.pointSizeF() - 1.0);
+    m_infoLabel->setFont(infoFont);
+    m_infoLabel->setWordWrap(true);
+    m_infoLabel->setVisible(false);
+    layout->addWidget(m_infoLabel);
+    layout->addWidget(m_chartView, 1);
+
     m_axisL = new QValueAxis;
     m_axisR = new QValueAxis;
     m_axisX = new QValueAxis;
@@ -50,7 +64,7 @@ DataGraph::DataGraph(QString name, QWidget *parent) : QMainWindow(parent)
     m_chart->addAxis(m_axisL, Qt::AlignLeft);
     m_chart->addAxis(m_axisR, Qt::AlignRight);
 
-    setCentralWidget(m_chartView);
+    setCentralWidget(container);
     if(!restoreGeometry(settings.value(mName + "/geometry").toByteArray()) || !restoreState(settings.value(mName + "/windowState").toByteArray()))
     {
         resize(1600, 300);
@@ -70,6 +84,20 @@ void DataGraph::setAxisText(QString x, QString left, QString right)
 void DataGraph::setLegendVisible(bool visible)
 {
     m_chart->legend()->setVisible(visible);
+}
+
+void DataGraph::setInfoText(const QString& text)
+{
+    if(!m_infoLabel)
+        return;
+    if(text.trimmed().isEmpty())
+    {
+        m_infoLabel->clear();
+        m_infoLabel->setVisible(false);
+        return;
+    }
+    m_infoLabel->setText(text);
+    m_infoLabel->setVisible(true);
 }
 
 void DataGraph::saveWinState()
@@ -205,6 +233,7 @@ void DataGraph::clearData(void)
     minX =  std::numeric_limits<double>::max();
     maxX =  std::numeric_limits<double>::lowest();
     m_chart->removeAllSeries();
+    setInfoText(QString());
     QMap<int, QList<QPointF> *>::iterator i;
     for (i = m_series.begin(); i != m_series.end(); ++i)
     {

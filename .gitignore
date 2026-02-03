@@ -35,6 +35,7 @@
 /build/
 /build-mingw/
 /logs/
+/tasks.md
 
 # Qt Creator/CMake user files
 *.user

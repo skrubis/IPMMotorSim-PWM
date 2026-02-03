@@ -48,6 +48,22 @@ Quick plot helper:
 python tools/plot_quicklook.py <path-to-run.csv>
 ```
 
+# Implemented Functionality (this fork)
+- SVPWM + DPWM variants (DPWM0/1, DPWMMIN/MAX) with blend control.
+- PWM modulation graph with zero-sequence/clamp/timing/sector visibility toggles.
+- Power stage loss estimation (conduction + switching + diode recovery) with PM300CLA060 placeholder curves.
+- Power stage parameter editor (deadtime, thermal, Vce/Eon/Eoff/Irr/trr curves, etc.).
+- Inverter losses window with per-device loss breakdown and averaged summary strip.
+- CSV logging includes modulation diagnostics, losses, and basic thermal estimates.
+
+# PWM/Loss Model Shortfalls (current limitations)
+- PWM is still averaged per control timestep; there is no event-based switching timeline yet.
+- Deadtime and conduction paths are modeled per-period, not per-edge; no minimum pulse clamp.
+- Switching loss uses curve interpolation without gate-drive dynamics, Miller effects, or parasitics.
+- Diode recovery is approximated from Irr/trr; no detailed charge waveform or reverse recovery shape.
+- Thermal model is first-order with fixed Rth values; no coupling or Cth from datasheet.
+- Motor plant remains the legacy average model, so phase current ripple is not yet resolved.
+
 # Current Limitations
 The simulator uses a number of new parameters not yet found in most builds of stm32-sin.  There is a replacement param_prj.h file in the project directory that will be used in place of the one in the subdirectory.  It is up to the user to ensure that the parameters contained in this replacement file are appropriate for whichever versions of the stn32-sine software is being used.
 

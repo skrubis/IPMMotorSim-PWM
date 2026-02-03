@@ -21,6 +21,7 @@
 #define DATAGRAPH_H
 
 #include <QMainWindow>
+#include <QLabel>
 #include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
 #include "chartview.h"
@@ -47,10 +48,12 @@ public:
     void setOpacity(qreal opacity, int key);
     void setAxisText(QString x, QString left, QString right);
     void setLegendVisible(bool visible);
+    void setInfoText(const QString& text);
 
 private:
     Chart *m_chart;
     ChartView *m_chartView;
+    QLabel *m_infoLabel;
     QMap<int, QList<QPointF> *> m_series;
     QMap<int, QString> m_legends;
     QMap<int, QColor> m_colours;

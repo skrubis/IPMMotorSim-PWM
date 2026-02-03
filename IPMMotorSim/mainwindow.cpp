@@ -20,6 +20,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include <algorithm>
+#include <cmath>
 #include <QtMath>
 #include <QDateTime>
 #include <QDoubleValidator>
@@ -33,11 +34,14 @@
 #include <QLabel>
 #include <QLocale>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QTextStream>
 #include <QToolTip>
 #include <QApplication>
 #include <QCursor>
+#include <QGuiApplication>
+#include <QScreen>
 #include "pwmgeneration.h"
 #include "foc.h"
 #include "params.h"
@@ -108,6 +112,13 @@
 #define ELEC_POWER 8
 #define EFFICIENCY 9
 
+//Loss graph
+#define LOSS_IGBT_COND 10
+#define LOSS_DIODE_COND 11
+#define LOSS_IGBT_SW 12
+#define LOSS_DIODE_RR 13
+#define LOSS_TOTAL 14
+
 //Op point graph
 #define IDIQAMPS 2
 
@@ -121,6 +132,49 @@ extern volatile double g_il2_input;
 // C test stubs globals
 extern volatile bool disablePWM;
 
+static double PwmFrequencyHzFromParam(int pwmfrq)
+{
+    switch(pwmfrq)
+    {
+        case 0: return 17600.0;
+        case 1: return 8800.0;
+        case 2: return 4400.0;
+        default: return 8800.0;
+    }
+}
+
+template <size_t N>
+static std::array<sim::CurvePoint, N> ParseCurvePoints(const QString& text,
+                                                       const std::array<sim::CurvePoint, N>& defaults)
+{
+    std::array<sim::CurvePoint, N> out = defaults;
+    int idx = 0;
+
+    const auto lines = text.split(QRegularExpression("[\\r\\n]+"), Qt::SkipEmptyParts);
+    for(const QString& rawLine : lines)
+    {
+        QString line = rawLine.trimmed();
+        if(line.isEmpty() || line.startsWith('#'))
+            continue;
+        line.replace(',', ' ');
+        const auto parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if(parts.size() < 3)
+            continue;
+        bool okI = false, okA = false, okB = false;
+        const double current = parts[0].toDouble(&okI);
+        const double v25 = parts[1].toDouble(&okA);
+        const double v125 = parts[2].toDouble(&okB);
+        if(!okI || !okA || !okB)
+            continue;
+        if(idx >= static_cast<int>(N))
+            break;
+        out[static_cast<size_t>(idx)] = {current, v25, v125};
+        ++idx;
+    }
+
+    return out;
+}
+
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -130,8 +184,24 @@ MainWindow::MainWindow(QWidget *parent) :
     setAttribute(Qt::WA_AlwaysShowToolTips, true);
 
     QSettings settings("OpenInverter", "IPMMotorSim");
-    restoreGeometry(settings.value("mainwin/geometry").toByteArray());
-    restoreState(settings.value("mainwin/windowState").toByteArray());
+    const bool okGeo = restoreGeometry(settings.value("mainwin/geometry").toByteArray());
+    const bool okState = restoreState(settings.value("mainwin/windowState").toByteArray());
+    if(!okGeo || !okState)
+    {
+        settings.remove("mainwin/geometry");
+        settings.remove("mainwin/windowState");
+    }
+    {
+        const QRect available = QGuiApplication::primaryScreen()
+                                    ? QGuiApplication::primaryScreen()->availableGeometry()
+                                    : QRect(0, 0, 1280, 720);
+        const QRect current = frameGeometry();
+        if(!available.intersects(current) || width() <= 0 || height() <= 0)
+        {
+            resize(660, 980);
+            move(available.center() - rect().center());
+        }
+    }
 
     if(settings.contains(ui->vehicleWeight->objectName())) ui->vehicleWeight->setText(settings.value(ui->vehicleWeight->objectName(),QString()).toString());
     if(settings.contains(ui->wheelSize->objectName())) ui->wheelSize->setText(settings.value(ui->wheelSize->objectName(),QString()).toString());
@@ -149,6 +219,21 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->runTime->objectName())) ui->runTime->setText(settings.value(ui->runTime->objectName(),QString()).toString());
     if(settings.contains(ui->startRpm->objectName())) ui->startRpm->setText(settings.value(ui->startRpm->objectName(),QString()).toString());
     if(settings.contains(ui->modBlend->objectName())) ui->modBlend->setText(settings.value(ui->modBlend->objectName(),QString()).toString());
+    if(settings.contains(ui->deadtimeUs->objectName())) ui->deadtimeUs->setText(settings.value(ui->deadtimeUs->objectName(),QString()).toString());
+    if(settings.contains(ui->sinkTemp->objectName())) ui->sinkTemp->setText(settings.value(ui->sinkTemp->objectName(),QString()).toString());
+    if(settings.contains(ui->thermalTau->objectName())) ui->thermalTau->setText(settings.value(ui->thermalTau->objectName(),QString()).toString());
+    if(settings.contains(ui->vrefV->objectName())) ui->vrefV->setText(settings.value(ui->vrefV->objectName(),QString()).toString());
+    if(settings.contains(ui->kvExp->objectName())) ui->kvExp->setText(settings.value(ui->kvExp->objectName(),QString()).toString());
+    if(settings.contains(ui->diodeVf25->objectName())) ui->diodeVf25->setText(settings.value(ui->diodeVf25->objectName(),QString()).toString());
+    if(settings.contains(ui->diodeVf125->objectName())) ui->diodeVf125->setText(settings.value(ui->diodeVf125->objectName(),QString()).toString());
+    if(settings.contains(ui->rthJcIgbt->objectName())) ui->rthJcIgbt->setText(settings.value(ui->rthJcIgbt->objectName(),QString()).toString());
+    if(settings.contains(ui->rthJcDiode->objectName())) ui->rthJcDiode->setText(settings.value(ui->rthJcDiode->objectName(),QString()).toString());
+    if(settings.contains(ui->rthCs->objectName())) ui->rthCs->setText(settings.value(ui->rthCs->objectName(),QString()).toString());
+    if(settings.contains(ui->vcePoints->objectName())) ui->vcePoints->setPlainText(settings.value(ui->vcePoints->objectName(),QString()).toString());
+    if(settings.contains(ui->eonPoints->objectName())) ui->eonPoints->setPlainText(settings.value(ui->eonPoints->objectName(),QString()).toString());
+    if(settings.contains(ui->eoffPoints->objectName())) ui->eoffPoints->setPlainText(settings.value(ui->eoffPoints->objectName(),QString()).toString());
+    if(settings.contains(ui->irrPoints->objectName())) ui->irrPoints->setPlainText(settings.value(ui->irrPoints->objectName(),QString()).toString());
+    if(settings.contains(ui->trrPoints->objectName())) ui->trrPoints->setPlainText(settings.value(ui->trrPoints->objectName(),QString()).toString());
     if(settings.contains(ui->RoadGradient->objectName())) ui->RoadGradient->setText(settings.value(ui->RoadGradient->objectName(),QString()).toString());
     if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
     if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
@@ -158,10 +243,21 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
     if(settings.contains(ui->cb_PwmSector->objectName())) ui->cb_PwmSector->setChecked(settings.value(ui->cb_PwmSector->objectName()).toBool());
     if(settings.contains(ui->cb_ShowLegends->objectName())) ui->cb_ShowLegends->setChecked(settings.value(ui->cb_ShowLegends->objectName()).toBool());
+    if(settings.contains(ui->cb_Losses->objectName())) ui->cb_Losses->setChecked(settings.value(ui->cb_Losses->objectName()).toBool());
     if(settings.contains(ui->modulationMode->objectName()))
         ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
 
     ui->startRpm->setValidator(new QIntValidator(-20000, 20000, ui->startRpm));
+    ui->deadtimeUs->setValidator(new QDoubleValidator(0.0, 50.0, 3, ui->deadtimeUs));
+    ui->sinkTemp->setValidator(new QDoubleValidator(-40.0, 200.0, 2, ui->sinkTemp));
+    ui->thermalTau->setValidator(new QDoubleValidator(0.01, 100.0, 3, ui->thermalTau));
+    ui->vrefV->setValidator(new QDoubleValidator(1.0, 1200.0, 1, ui->vrefV));
+    ui->kvExp->setValidator(new QDoubleValidator(0.0, 3.0, 2, ui->kvExp));
+    ui->diodeVf25->setValidator(new QDoubleValidator(0.0, 10.0, 3, ui->diodeVf25));
+    ui->diodeVf125->setValidator(new QDoubleValidator(0.0, 10.0, 3, ui->diodeVf125));
+    ui->rthJcIgbt->setValidator(new QDoubleValidator(0.0, 1.0, 3, ui->rthJcIgbt));
+    ui->rthJcDiode->setValidator(new QDoubleValidator(0.0, 1.0, 3, ui->rthJcDiode));
+    ui->rthCs->setValidator(new QDoubleValidator(0.0, 1.0, 3, ui->rthCs));
     QDoubleValidator *blendValidator = new QDoubleValidator(0.0, 1.0, 3, ui->modBlend);
     blendValidator->setNotation(QDoubleValidator::StandardNotation);
     ui->modBlend->setValidator(blendValidator);
@@ -199,6 +295,21 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->AddNoise, "Enable noise on current feedback inputs.");
     tip(ui->runTime, "Duration for Run For (s).");
     tip(ui->startRpm, "Initial mechanical speed (RPM), applied on Restart.");
+    tip(ui->deadtimeUs, "PWM deadtime in microseconds applied in the inverter model.");
+    tip(ui->sinkTemp, "Heatsink/case reference temperature (C) for thermal model.");
+    tip(ui->thermalTau, "Thermal time constant (s) for first-order junction tracking.");
+    tip(ui->vrefV, "Reference Vdc used for switching-energy curves.");
+    tip(ui->kvExp, "Voltage scaling exponent: E = Eref * (Vdc/Vref)^kV.");
+    tip(ui->diodeVf25, "Diode forward drop at 25C (V).");
+    tip(ui->diodeVf125, "Diode forward drop at 125C (V).");
+    tip(ui->rthJcIgbt, "IGBT junction-to-case thermal resistance per switch (C/W).");
+    tip(ui->rthJcDiode, "Diode junction-to-case thermal resistance per switch (C/W).");
+    tip(ui->rthCs, "Case-to-sink thermal resistance for the module (C/W).");
+    tip(ui->vcePoints, "IGBT Vce(sat) curve points: I, V25C, V125C (one per line).");
+    tip(ui->eonPoints, "IGBT Eon curve points: I, 25C, 125C (mJ) per line.");
+    tip(ui->eoffPoints, "IGBT Eoff curve points: I, 25C, 125C (mJ) per line.");
+    tip(ui->irrPoints, "Diode reverse recovery current points: I, 25C, 125C (A) per line.");
+    tip(ui->trrPoints, "Diode reverse recovery time points: I, 25C, 125C (us) per line.");
     tip(ui->torqueDemand, "Torque demand in percent.");
     tip(ui->throttleCurrent, "Current per percent throttle (A/%).");
     tip(ui->opMode, "Controller mode: 1=Run, 2=Manual.");
@@ -234,6 +345,7 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->cb_PwmTiming, "Show T1/T2/T0 timing components.");
     tip(ui->cb_PwmSector, "Show SVPWM sector (1-6).");
     tip(ui->cb_ShowLegends, "Toggle graph legends on/off.");
+    tip(ui->cb_Losses, "Show inverter loss breakdown window.");
     tip(ui->cb_MotorPos, "Include motor position in simulation graph.");
     tip(ui->cb_PhaseVolts, "Include phase voltages in controller volt graph.");
     tip(ui->cb_PhaseCurrs, "Include phase currents in motor current graph.");
@@ -284,6 +396,7 @@ MainWindow::MainWindow(QWidget *parent) :
     pwmGraph = new DataGraph("pwm", this);
     idigGraph = new IdIqGraph("idig", this);
     powerGraph = new DataGraph("power", this);
+    lossGraph = new DataGraph("loss", this);
 
     motorGraph->hide();//not sure why needed but otherwise always up?
 
@@ -468,7 +581,22 @@ MainWindow::MainWindow(QWidget *parent) :
     powerGraph->addSeries("Torque (Nm)", right, TORQUE);
     powerGraph->addSeries("Elec Power (kW)", left, ELEC_POWER);
     powerGraph->addSeries("Efficiency (%)", left, EFFICIENCY);
+
+    lossGraph->setWindowTitle("Inverter Losses");
+    lossGraph->setAxisText("Time (s)", "Loss (kW)", "");
+    lossGraph->addSeries("IGBT Cond (kW)", left, LOSS_IGBT_COND);
+    lossGraph->setColour(QColor(0x56, 0xB4, 0xE9), LOSS_IGBT_COND);
+    lossGraph->addSeries("Diode Cond (kW)", left, LOSS_DIODE_COND);
+    lossGraph->setColour(QColor(0xE6, 0x9F, 0x00), LOSS_DIODE_COND);
+    lossGraph->addSeries("IGBT Sw (kW)", left, LOSS_IGBT_SW);
+    lossGraph->setColour(QColor(0xD5, 0x5E, 0x00), LOSS_IGBT_SW);
+    lossGraph->addSeries("Diode RR (kW)", left, LOSS_DIODE_RR);
+    lossGraph->setColour(QColor(0xCC, 0x79, 0xA7), LOSS_DIODE_RR);
+    lossGraph->addSeries("Total Loss (kW)", left, LOSS_TOTAL);
+    lossGraph->setColour(QColor(0x00, 0x00, 0x00), LOSS_TOTAL);
     if(settings.contains(ui->cb_PowTorqTime->objectName())) ui->cb_PowTorqTime->setChecked(settings.value(ui->cb_PowTorqTime->objectName()).toBool());
+    if(settings.contains(ui->cb_Losses->objectName())) ui->cb_Losses->setChecked(settings.value(ui->cb_Losses->objectName()).toBool());
+    on_cb_Losses_toggled(ui->cb_Losses->isChecked());
     if(settings.contains(ui->rb_Speed->objectName()))
     {
         if(settings.value(ui->rb_Speed->objectName()).toBool())
@@ -538,6 +666,21 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->runTime->objectName(), ui->runTime->text());
     settings.setValue(ui->startRpm->objectName(), ui->startRpm->text());
     settings.setValue(ui->modBlend->objectName(), ui->modBlend->text());
+    settings.setValue(ui->deadtimeUs->objectName(), ui->deadtimeUs->text());
+    settings.setValue(ui->sinkTemp->objectName(), ui->sinkTemp->text());
+    settings.setValue(ui->thermalTau->objectName(), ui->thermalTau->text());
+    settings.setValue(ui->vrefV->objectName(), ui->vrefV->text());
+    settings.setValue(ui->kvExp->objectName(), ui->kvExp->text());
+    settings.setValue(ui->diodeVf25->objectName(), ui->diodeVf25->text());
+    settings.setValue(ui->diodeVf125->objectName(), ui->diodeVf125->text());
+    settings.setValue(ui->rthJcIgbt->objectName(), ui->rthJcIgbt->text());
+    settings.setValue(ui->rthJcDiode->objectName(), ui->rthJcDiode->text());
+    settings.setValue(ui->rthCs->objectName(), ui->rthCs->text());
+    settings.setValue(ui->vcePoints->objectName(), ui->vcePoints->toPlainText());
+    settings.setValue(ui->eonPoints->objectName(), ui->eonPoints->toPlainText());
+    settings.setValue(ui->eoffPoints->objectName(), ui->eoffPoints->toPlainText());
+    settings.setValue(ui->irrPoints->objectName(), ui->irrPoints->toPlainText());
+    settings.setValue(ui->trrPoints->objectName(), ui->trrPoints->toPlainText());
     settings.setValue(ui->ThrotRamps->objectName(), ui->ThrotRamps->isChecked());
     settings.setValue(ui->RoadGradient->objectName(), ui->RoadGradient->text());
     settings.setValue(ui->modulationMode->objectName(), ui->modulationMode->currentIndex());
@@ -552,6 +695,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->cb_PwmTiming->objectName(), ui->cb_PwmTiming->isChecked());
     settings.setValue(ui->cb_PwmSector->objectName(), ui->cb_PwmSector->isChecked());
     settings.setValue(ui->cb_ShowLegends->objectName(), ui->cb_ShowLegends->isChecked());
+    settings.setValue(ui->cb_Losses->objectName(), ui->cb_Losses->isChecked());
     settings.setValue(ui->cb_OpPoint->objectName(), ui->cb_OpPoint->isChecked());
     settings.setValue(ui->cb_PowTorqTime->objectName(), ui->cb_PowTorqTime->isChecked());
     settings.setValue(ui->cb_Simulation->objectName(), ui->cb_Simulation->isChecked());
@@ -571,6 +715,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     voltageGraph->saveWinState();
     idigGraph->saveWinState();
     powerGraph->saveWinState();
+    lossGraph->saveWinState();
     QWidget::closeEvent(event);
 }
 
@@ -663,6 +808,34 @@ void MainWindow::runFor(int num_steps)
     double modBlend = ui->modBlend->text().toDouble();
     modBlend = std::clamp(modBlend, 0.0, 1.0);
 
+    sim::InverterParams invParams;
+    invParams.pwm_frequency_hz = PwmFrequencyHzFromParam(Param::GetInt(Param::pwmfrq));
+    auto readDouble = [](QLineEdit* field, double fallback)
+    {
+        bool ok = false;
+        const double val = field ? field->text().toDouble(&ok) : fallback;
+        return ok ? val : fallback;
+    };
+    invParams.deadtime_s = std::max(0.0, readDouble(ui->deadtimeUs, 2.0)) * 1e-6;
+    invParams.sink_temp_C = readDouble(ui->sinkTemp, 25.0);
+    invParams.thermal_tau_s = std::max(0.01, readDouble(ui->thermalTau, 1.0));
+    sim::PowerModuleParams moduleParams = sim::PM300CLA060();
+    moduleParams.vref_V = std::max(1.0, readDouble(ui->vrefV, moduleParams.vref_V));
+    moduleParams.kv = std::max(0.0, readDouble(ui->kvExp, moduleParams.kv));
+    moduleParams.diode_vf_25C_V = std::max(0.0, readDouble(ui->diodeVf25, moduleParams.diode_vf_25C_V));
+    moduleParams.diode_vf_125C_V = std::max(0.0, readDouble(ui->diodeVf125, moduleParams.diode_vf_125C_V));
+    moduleParams.rth_jc_igbt_C_per_W = std::max(0.0, readDouble(ui->rthJcIgbt, moduleParams.rth_jc_igbt_C_per_W));
+    moduleParams.rth_jc_diode_C_per_W = std::max(0.0, readDouble(ui->rthJcDiode, moduleParams.rth_jc_diode_C_per_W));
+    moduleParams.rth_cs_C_per_W = std::max(0.0, readDouble(ui->rthCs, moduleParams.rth_cs_C_per_W));
+    moduleParams.igbt_vce_sat = ParseCurvePoints<4>(ui->vcePoints->toPlainText(), moduleParams.igbt_vce_sat);
+    moduleParams.eon_mJ = ParseCurvePoints<3>(ui->eonPoints->toPlainText(), moduleParams.eon_mJ);
+    moduleParams.eoff_mJ = ParseCurvePoints<3>(ui->eoffPoints->toPlainText(), moduleParams.eoff_mJ);
+    moduleParams.irr_A = ParseCurvePoints<3>(ui->irrPoints->toPlainText(), moduleParams.irr_A);
+    moduleParams.trr_us = ParseCurvePoints<3>(ui->trrPoints->toPlainText(), moduleParams.trr_us);
+
+    inverter.SetModuleParams(moduleParams);
+    inverter.ResetThermals(invParams.sink_temp_C);
+
     if(num_steps<0)
         return;
 
@@ -674,6 +847,17 @@ void MainWindow::runFor(int num_steps)
     QList<QPointF> listPwmT1, listPwmT2, listPwmT0, listPwmSector;
     QList<QPointF> listIdIq;
     QList<QPointF> listPower, listTorque, listElecPower, listEfficiency;
+    QList<QPointF> listLossIgbtCond, listLossDiodeCond, listLossIgbtSw, listLossDiodeRr, listLossTotal;
+    double sumLossIgbtCond = 0.0;
+    double sumLossDiodeCond = 0.0;
+    double sumLossIgbtSw = 0.0;
+    double sumLossDiodeRr = 0.0;
+    double sumLossTotal = 0.0;
+    double sumInvEff = 0.0;
+    double sumTjRiseIgbt = 0.0;
+    double sumTjRiseDiode = 0.0;
+    int lossSamples = 0;
+    int effSamples = 0;
 
     QFile logFile;
     QTextStream logStream;
@@ -701,6 +885,17 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# timestep_s=" << m_timestep << "\n";
                 logStream << "# loop_freq_hz=" << (m_timestep > 0 ? (1.0 / m_timestep) : 0.0) << "\n";
                 logStream << "# pwmfrq_param=" << Param::GetInt(Param::pwmfrq) << " (" << PWMFRQS << ")\n";
+                logStream << "# pwm_freq_hz=" << invParams.pwm_frequency_hz << "\n";
+                logStream << "# deadtime_s=" << invParams.deadtime_s << "\n";
+                logStream << "# sink_temp_c=" << invParams.sink_temp_C << "\n";
+                logStream << "# thermal_tau_s=" << invParams.thermal_tau_s << "\n";
+                logStream << "# inverter_module=PM300CLA060\n";
+                logStream << "# module_vref_v=" << moduleParams.vref_V << ", kv=" << moduleParams.kv << "\n";
+                logStream << "# module_diode_vf_25c=" << moduleParams.diode_vf_25C_V
+                          << ", diode_vf_125c=" << moduleParams.diode_vf_125C_V << "\n";
+                logStream << "# module_rth_jc_igbt=" << moduleParams.rth_jc_igbt_C_per_W
+                          << ", rth_jc_diode=" << moduleParams.rth_jc_diode_C_per_W
+                          << ", rth_cs=" << moduleParams.rth_cs_C_per_W << "\n";
                 logStream << "# vdc=" << m_Vdc << "\n";
                 logStream << "# modulation_mode=" << modModeStr << "\n";
                 logStream << "# modulation_blend=" << modBlend << "\n";
@@ -714,7 +909,9 @@ void MainWindow::runFor(int num_steps)
                           << "ia,ib,ic,id,iq,"
                           << "id_ctrl,iq_ctrl,ifw,vd_ctrl,vq_ctrl,"
                           << "theta_e_deg,rpm,torque_nm,power_w,"
-                          << "mod_mode,mod_blend,sector,t1,t2,t0,zero_seq,clamp_leg,clamp_pol\n";
+                          << "mod_mode,mod_blend,sector,t1,t2,t0,zero_seq,clamp_leg,clamp_pol,"
+                          << "inv_igbt_cond_w,inv_diode_cond_w,inv_igbt_sw_w,inv_diode_rr_w,inv_total_w,inv_eff_pct,"
+                          << "tcase_c,tj_igbt_c,tj_diode_c\n";
                 statusBar()->showMessage(QString("Logging to %1").arg(logPath), 5000);
             }
             else
@@ -782,6 +979,13 @@ void MainWindow::runFor(int num_steps)
         sim::DutyCycles duty;
         sim::ModulatorDiag modDiag{};
         sim::PhaseVoltages voltages;
+        sim::LossBreakdown invLoss{};
+        sim::ThermalState invThermal{};
+        const sim::PhaseCurrents phaseCurrents{
+            motor->getIaSamp(),
+            motor->getIbSamp(),
+            motor->getIcSamp()
+        };
         if(!pwmEnabled) //needed to allow OpenInverter initialisation to complete
         {
             voltages = {};
@@ -797,13 +1001,13 @@ void MainWindow::runFor(int num_steps)
             if(modMode == sim::ModulationMode::Firmware)
             {
                 duty = modulator.GetDutyCycles();
-                voltages = inverter.FromDuty(m_Vdc, duty);
+                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal);
                 modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, sim::ModulationMode::SVPWM, modBlend, &modDiag);
             }
             else
             {
                 duty = modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, modMode, modBlend, &modDiag);
-                voltages = inverter.FromDuty(m_Vdc, duty);
+                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal);
             }
         }
 
@@ -930,11 +1134,36 @@ void MainWindow::runFor(int num_steps)
         else
             listIdIq.append(QPointF(motor->getVd(), motor->getVq()));
 
-        double elec_power=0, efficiency=0;
-        if(ui->cb_Efficiency->isChecked())
+        const double elec_power = (Va * motor->getIaSamp()) + (Vb * motor->getIbSamp()) + (Vc * motor->getIcSamp());
+        double efficiency = 0;
+        if(ui->cb_Efficiency->isChecked() && std::abs(elec_power) > 1e-9)
+            efficiency = 100.0 * (motor->getPower() / elec_power);
+
+        const double inv_igbt_cond_W = invLoss.phase[0].igbt_cond_W + invLoss.phase[1].igbt_cond_W + invLoss.phase[2].igbt_cond_W;
+        const double inv_diode_cond_W = invLoss.phase[0].diode_cond_W + invLoss.phase[1].diode_cond_W + invLoss.phase[2].diode_cond_W;
+        const double inv_igbt_sw_W = invLoss.phase[0].igbt_sw_W + invLoss.phase[1].igbt_sw_W + invLoss.phase[2].igbt_sw_W;
+        const double inv_diode_rr_W = invLoss.phase[0].diode_rr_W + invLoss.phase[1].diode_rr_W + invLoss.phase[2].diode_rr_W;
+        const double inv_total_W = inv_igbt_cond_W + inv_diode_cond_W + inv_igbt_sw_W + inv_diode_rr_W;
+        double inv_eff = 0.0;
+        if(elec_power > 1e-6)
+            inv_eff = 100.0 * (elec_power / (elec_power + inv_total_W));
+        const double tj_igbt_avg = (invThermal.igbt_C[0] + invThermal.igbt_C[1] + invThermal.igbt_C[2]) / 3.0;
+        const double tj_diode_avg = (invThermal.diode_C[0] + invThermal.diode_C[1] + invThermal.diode_C[2]) / 3.0;
+        if(pwmEnabled)
         {
-            elec_power = (Va * motor->getIaSamp()) + (Vb * motor->getIbSamp()) + (Vc * motor->getIcSamp());
-            efficiency = 100.0 * (motor->getPower()/elec_power);
+            sumLossIgbtCond += inv_igbt_cond_W;
+            sumLossDiodeCond += inv_diode_cond_W;
+            sumLossIgbtSw += inv_igbt_sw_W;
+            sumLossDiodeRr += inv_diode_rr_W;
+            sumLossTotal += inv_total_W;
+            sumTjRiseIgbt += (tj_igbt_avg - invParams.sink_temp_C);
+            sumTjRiseDiode += (tj_diode_avg - invParams.sink_temp_C);
+            ++lossSamples;
+            if(inv_eff > 0.0)
+            {
+                sumInvEff += inv_eff;
+                ++effSamples;
+            }
         }
 
         if(logEnabled)
@@ -953,7 +1182,10 @@ void MainWindow::runFor(int num_steps)
                       << vd_ctrl << "," << vq_ctrl << ","
                       << motor->getElecPosition() << "," << rpm << "," << motor->getTorque() << "," << motor->getPower() << ","
                       << modModeStr << "," << modBlend << "," << modDiag.sector << "," << modDiag.t1 << "," << modDiag.t2 << "," << modDiag.t0 << ","
-                      << zero_seq_log << "," << modDiag.clamp_leg << "," << modDiag.clamp_polarity
+                      << zero_seq_log << "," << modDiag.clamp_leg << "," << modDiag.clamp_polarity << ","
+                      << inv_igbt_cond_W << "," << inv_diode_cond_W << "," << inv_igbt_sw_W << "," << inv_diode_rr_W << ","
+                      << inv_total_W << "," << inv_eff << ","
+                      << invThermal.case_C << "," << tj_igbt_avg << "," << tj_diode_avg
                       << "\n";
         }
 
@@ -961,6 +1193,11 @@ void MainWindow::runFor(int num_steps)
         {
             listPower.append(QPointF(motor->getMotorFreq()*60, motor->getPower()/1000));
             listTorque.append(QPointF(motor->getMotorFreq()*60, motor->getTorque()));
+            listLossIgbtCond.append(QPointF(motor->getMotorFreq()*60, inv_igbt_cond_W/1000));
+            listLossDiodeCond.append(QPointF(motor->getMotorFreq()*60, inv_diode_cond_W/1000));
+            listLossIgbtSw.append(QPointF(motor->getMotorFreq()*60, inv_igbt_sw_W/1000));
+            listLossDiodeRr.append(QPointF(motor->getMotorFreq()*60, inv_diode_rr_W/1000));
+            listLossTotal.append(QPointF(motor->getMotorFreq()*60, inv_total_W/1000));
             if(ui->cb_Efficiency->isChecked())
             {
                 listElecPower.append(QPointF(motor->getMotorFreq()*60, elec_power/1000));
@@ -971,6 +1208,11 @@ void MainWindow::runFor(int num_steps)
         {
             listPower.append(QPointF(m_time, motor->getPower()/1000));
             listTorque.append(QPointF(m_time, motor->getTorque()));
+            listLossIgbtCond.append(QPointF(m_time, inv_igbt_cond_W/1000));
+            listLossDiodeCond.append(QPointF(m_time, inv_diode_cond_W/1000));
+            listLossIgbtSw.append(QPointF(m_time, inv_igbt_sw_W/1000));
+            listLossDiodeRr.append(QPointF(m_time, inv_diode_rr_W/1000));
+            listLossTotal.append(QPointF(m_time, inv_total_W/1000));
             if(ui->cb_Efficiency->isChecked())
             {
                 listElecPower.append(QPointF(m_time, elec_power/1000));
@@ -980,6 +1222,31 @@ void MainWindow::runFor(int num_steps)
 
         m_time += m_timestep;
     }
+
+    QString lossInfo;
+    if(lossSamples > 0)
+    {
+        const double avgIgbtCond = sumLossIgbtCond / lossSamples;
+        const double avgDiodeCond = sumLossDiodeCond / lossSamples;
+        const double avgIgbtSw = sumLossIgbtSw / lossSamples;
+        const double avgDiodeRr = sumLossDiodeRr / lossSamples;
+        const double avgTotal = sumLossTotal / lossSamples;
+        const double avgEff = effSamples > 0 ? (sumInvEff / effSamples) : 0.0;
+        const double avgTjRiseIgbt = sumTjRiseIgbt / lossSamples;
+        const double avgTjRiseDiode = sumTjRiseDiode / lossSamples;
+
+        lossInfo = QString("Avg loss: %1 kW | IGBT cond %2 kW | Diode cond %3 kW | IGBT sw %4 kW | "
+                           "Diode RR %5 kW | Inv eff %6% | ΔTj IGBT %7 C | ΔTj Diode %8 C")
+                       .arg(avgTotal / 1000.0, 0, 'f', 3)
+                       .arg(avgIgbtCond / 1000.0, 0, 'f', 3)
+                       .arg(avgDiodeCond / 1000.0, 0, 'f', 3)
+                       .arg(avgIgbtSw / 1000.0, 0, 'f', 3)
+                       .arg(avgDiodeRr / 1000.0, 0, 'f', 3)
+                       .arg(avgEff, 0, 'f', 1)
+                       .arg(avgTjRiseIgbt, 0, 'f', 1)
+                       .arg(avgTjRiseDiode, 0, 'f', 1);
+    }
+    lossGraph->setInfoText(lossInfo);
 
     motorGraph->addDataPoints(listIa, IA);
     motorGraph->addDataPoints(listIb, IB);
@@ -1032,6 +1299,11 @@ void MainWindow::runFor(int num_steps)
     powerGraph->addDataPoints(listTorque, TORQUE);
     powerGraph->addDataPoints(listElecPower, ELEC_POWER);
     powerGraph->addDataPoints(listEfficiency, EFFICIENCY);
+    lossGraph->addDataPoints(listLossIgbtCond, LOSS_IGBT_COND);
+    lossGraph->addDataPoints(listLossDiodeCond, LOSS_DIODE_COND);
+    lossGraph->addDataPoints(listLossIgbtSw, LOSS_IGBT_SW);
+    lossGraph->addDataPoints(listLossDiodeRr, LOSS_DIODE_RR);
+    lossGraph->addDataPoints(listLossTotal, LOSS_TOTAL);
 
     if(ui->cb_MotCurr->isChecked()) motorGraph->updateGraph();
     if(ui->cb_Simulation->isChecked()) simulationGraph->updateGraph();
@@ -1041,6 +1313,7 @@ void MainWindow::runFor(int num_steps)
     if(ui->cb_Pwm->isChecked()) pwmGraph->updateGraph();
     if(ui->cb_OpPoint->isChecked()) idigGraph->updateGraph(ui->rb_OP_Amps->isChecked());
     if(ui->cb_PowTorqTime->isChecked()) powerGraph->updateGraph();
+    if(ui->cb_Losses->isChecked()) lossGraph->updateGraph();
 }
 
 void MainWindow::on_vehicleWeight_editingFinished()
@@ -1161,6 +1434,7 @@ void MainWindow::on_pbRestart_clicked()
     pwmGraph->clearData();
     idigGraph->clearData();
     powerGraph->clearData();
+    lossGraph->clearData();
 }
 
 
@@ -1381,6 +1655,7 @@ void MainWindow::on_cb_ShowLegends_toggled(bool checked)
     pwmGraph->setLegendVisible(checked);
     idigGraph->setLegendVisible(checked);
     powerGraph->setLegendVisible(checked);
+    lossGraph->setLegendVisible(checked);
     if(ui->cb_MotCurr->isChecked()) motorGraph->updateGraph();
     if(ui->cb_Simulation->isChecked()) simulationGraph->updateGraph();
     if(ui->cb_ContVolt->isChecked()) controllerGraph->updateGraph();
@@ -1389,6 +1664,7 @@ void MainWindow::on_cb_ShowLegends_toggled(bool checked)
     if(ui->cb_Pwm->isChecked()) pwmGraph->updateGraph();
     if(ui->cb_OpPoint->isChecked()) idigGraph->updateGraph(ui->rb_OP_Amps->isChecked());
     if(ui->cb_PowTorqTime->isChecked()) powerGraph->updateGraph();
+    if(ui->cb_Losses->isChecked()) lossGraph->updateGraph();
 }
 
 void MainWindow::on_cb_PowTorqTime_toggled(bool checked)
@@ -1402,13 +1678,31 @@ void MainWindow::on_cb_PowTorqTime_toggled(bool checked)
         powerGraph->hide();
 }
 
+void MainWindow::on_cb_Losses_toggled(bool checked)
+{
+    if(checked)
+    {
+        lossGraph->updateGraph();
+        lossGraph->show();
+    }
+    else
+        lossGraph->hide();
+}
+
 void MainWindow::on_rb_Speed_toggled(bool checked)
 {
     powerGraph->clearData(); //need to restart as data arrays not right for new mode
+    lossGraph->clearData();
     if(checked)
+    {
         powerGraph->setAxisText("Shaft Speed (rpm)", "Power (kW)", "Torque (Nm)");
+        lossGraph->setAxisText("Shaft Speed (rpm)", "Loss (kW)", "");
+    }
     else
+    {
         powerGraph->setAxisText("Time (s)", "Power (kW)", "Torque (Nm)");
+        lossGraph->setAxisText("Time (s)", "Loss (kW)", "");
+    }
 }
 
 void MainWindow::on_RoadGradient_editingFinished()
@@ -1435,6 +1729,35 @@ void MainWindow::on_startRpm_editingFinished()
         rpm = 0.0;
     rpm = std::clamp(rpm, -20000.0, 20000.0);
     ui->startRpm->setText(QString::number(rpm, 'f', 0));
+}
+
+void MainWindow::on_deadtimeUs_editingFinished()
+{
+    bool ok = false;
+    double val = ui->deadtimeUs->text().toDouble(&ok);
+    if(!ok)
+        val = 2.0;
+    if(val < 0.0)
+        val = 0.0;
+    ui->deadtimeUs->setText(QString::number(val, 'f', 3));
+}
+
+void MainWindow::on_sinkTemp_editingFinished()
+{
+    bool ok = false;
+    double val = ui->sinkTemp->text().toDouble(&ok);
+    if(!ok)
+        val = 25.0;
+    ui->sinkTemp->setText(QString::number(val, 'f', 1));
+}
+
+void MainWindow::on_thermalTau_editingFinished()
+{
+    bool ok = false;
+    double val = ui->thermalTau->text().toDouble(&ok);
+    if(!ok || val <= 0.0)
+        val = 1.0;
+    ui->thermalTau->setText(QString::number(val, 'f', 3));
 }
 
 void MainWindow::on_modBlend_editingFinished()
