@@ -23,7 +23,7 @@
 #include <QMainWindow>
 #include "datagraph.h"
 #include "idiqgraph.h"
-#include "motormodel.h"
+#include "sim/motor_plant.h"
 
 
 
@@ -44,9 +44,10 @@ private:
     DataGraph *controllerGraph;
     DataGraph *debugGraph;
     DataGraph *voltageGraph;
+    DataGraph *pwmGraph;
     IdIqGraph *idigGraph;
     DataGraph *powerGraph;
-    MotorModel *motor;
+    sim::MotorPlant *motor;
     double m_time;
     uint32_t m_old_time;
     uint32_t m_old_ms_time;
@@ -156,6 +157,8 @@ private slots:
     void on_cb_MotCurr_toggled(bool checked);
 
     void on_cb_PowTorqTime_toggled(bool checked);
+
+    void on_cb_Pwm_toggled(bool checked);
 
     void on_rb_Speed_toggled(bool checked);
 

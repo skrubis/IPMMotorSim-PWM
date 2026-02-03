@@ -16,6 +16,11 @@ Terminal::Terminal()
    defaultTerminal = this;
 }
 
+void Terminal::PutChar(char c)
+{
+   (void)c;
+}
+
 //todo - pull from SOMETHING_LIST definition in pwmgeneration
 const char binHeader[] =  "{\"01\":{\"name\":\"count\",\"size\":8,\"scale\":1,\"signed\":0},\
 \"02\":{\"name\":\"angle\",\"size\":14,\"scale\":4,\"signed\":0},\
@@ -64,7 +69,7 @@ void Terminal::SendBinary(uint8_t* data, uint32_t len)
     }
 }
 
-void TerminalCommands::PrintParamsJson(Terminal* term, char *arg)
+void TerminalCommands::PrintParamsJson(IPutChar* term, char *arg)
 {
    (void)term;
    (void)arg;
@@ -90,7 +95,8 @@ void TerminalCommands::PrintParamsJson(Terminal* term, char *arg)
          str.asprintf("%c\r\n   \"%s\": {\"unit\":\"%s\",\"value\":%.2f,",comma, pAtr->name, pAtr->unit, Param::GetFloat((Param::PARAM_NUM)idx));
          out << str;
 
-         if (Param::IsParam((Param::PARAM_NUM)idx))
+         Param::PARAM_TYPE paramType = Param::GetType((Param::PARAM_NUM)idx);
+         if (paramType == Param::TYPE_PARAM || paramType == Param::TYPE_TESTPARAM)
          {
             //fprintf(term, "\"isparam\":true,\"minimum\":%f,\"maximum\":%f,\"default\":%f,\"category\":\"%s\",\"i\":%d}",
             //       pAtr->min, pAtr->max, pAtr->def, pAtr->category, idx);

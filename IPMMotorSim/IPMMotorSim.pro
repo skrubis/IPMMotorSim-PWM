@@ -33,6 +33,7 @@ CONFIG += c++11
 INCLUDEPATH += $$PWD/stm32-sine/include
 INCLUDEPATH += $$PWD/stm32-sine/libopencm3/include
 INCLUDEPATH += $$PWD/stm32-sine/libopeninv/include
+INCLUDEPATH += $$PWD/../src
 
 SOURCES += \
         main.cpp \
@@ -52,7 +53,10 @@ SOURCES += \
     cpp_teststubs.cpp \
     stm32-sine/src/pwmgeneration.cpp \
     idiqgraph.cpp \
-    terminal_stubs.cpp
+    terminal_stubs.cpp \
+    ../src/sim/controller.cpp \
+    ../src/sim/modulator.cpp \
+    ../src/sim/inverter_switching_model.cpp
 
 HEADERS += \
         mainwindow.h \
@@ -62,7 +66,12 @@ HEADERS += \
     motormodel.h \
     stm32-sine/include/pwmgeneration.h \
     teststubs.h \
-    idiqgraph.h
+    idiqgraph.h \
+    ../src/sim/controller.h \
+    ../src/sim/modulator.h \
+    ../src/sim/inverter_switching_model.h \
+    ../src/sim/motor_plant.h \
+    ../src/sim/mechanical_load.h
 
 FORMS += \
         mainwindow.ui

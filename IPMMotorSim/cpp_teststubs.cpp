@@ -144,10 +144,6 @@ int Encoder::GetRotorDirection()
    return detectedDirection;
 }
 
-void timer_disable_break_main_output(int i)
-{
-    (void)i;
-}
 
 /** This function is called when the user changes a parameter */
 void Param::Change(Param::PARAM_NUM paramNum)
@@ -169,7 +165,11 @@ void Param::Change(Param::PARAM_NUM paramNum)
          PwmGeneration::SetPolePairRatio(Param::GetInt(Param::polepairs) / Param::GetInt(Param::respolepairs));
 
          #if CONTROL == CTRL_FOC
-         PwmGeneration::SetControllerGains(Param::GetInt(Param::curkp), Param::GetInt(Param::curki));
+         PwmGeneration::SetControllerGains(
+             Param::GetInt(Param::iqkp),
+             Param::GetInt(Param::idkp),
+             Param::GetInt(Param::exckp),
+             Param::GetInt(Param::curki));
          FOC::SetMotorParameters(Param::GetFloat(Param::lqminusld)/1000, Param::GetFloat(Param::fluxlinkage)/1000);
          #endif // CONTROL
          break;
@@ -185,8 +185,8 @@ int printf(const char *format, ...) {(void)format;return 0;}
 ANA_IN_LIST
 #undef ANA_IN_ENTRY
 
-uint8_t AnaIn::channel_array[ANA_IN_COUNT];
-uint16_t AnaIn::values[NUM_SAMPLES*ANA_IN_COUNT];
+uint8_t AnaIn::channel_array[ADC_COUNT][ANA_IN_COUNT / ADC_COUNT];
+uint16_t AnaIn::values[NUM_SAMPLES * ANA_IN_COUNT];
 
 uint16_t AnaIn::Get()
 {

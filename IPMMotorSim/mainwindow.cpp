@@ -20,14 +20,22 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include <QtMath>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QLocale>
 #include <QRandomGenerator>
 #include <QSettings>
+#include <QTextStream>
 #include "pwmgeneration.h"
 #include "foc.h"
 #include "params.h"
 #include "inc_encoder.h"
 #include "teststubs.h"
 #include "my_math.h"
+#include "sim/controller.h"
+#include "sim/inverter_switching_model.h"
+#include "sim/modulator.h"
 
 #define GPIOA 0
 #define GPIOB 1
@@ -67,6 +75,11 @@
 #define VVD_DT_RD 7
 #define VVLD 8
 #define VVLQ 9
+
+//PWM graph
+#define PWM_A 1
+#define PWM_B 2
+#define PWM_C 3
 
 //Power/Torque graph
 #define POWER 6
@@ -115,12 +128,14 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->RoadGradient->objectName())) ui->RoadGradient->setText(settings.value(ui->RoadGradient->objectName(),QString()).toString());
     if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
     if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
+    if(settings.contains(ui->cb_LogCsv->objectName())) ui->cb_LogCsv->setChecked(settings.value(ui->cb_LogCsv->objectName()).toBool());
 
     motorGraph = new DataGraph("motor", this);
     simulationGraph = new DataGraph("sim", this);
     controllerGraph = new DataGraph("cont", this);
     debugGraph = new DataGraph("debug", this);
     voltageGraph = new DataGraph("voltage", this);
+    pwmGraph = new DataGraph("pwm", this);
     idigGraph = new IdIqGraph("idig", this);
     powerGraph = new DataGraph("power", this);
 
@@ -138,7 +153,7 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->SyncAdv->setText(QString::number(Param::GetInt(Param::syncadv)));
     ui->FreqMax->setText(QString::number(Param::GetFloat(Param::fmax), 'f', 1));
     ui->Poles->setText(QString::number(Param::GetFloat(Param::polepairs), 'f', 1));
-    ui->CurrentKp->setText(QString::number(Param::GetInt(Param::curkp)));
+    ui->CurrentKp->setText(QString::number(Param::GetInt(Param::iqkp)));
     ui->CurrentKi->setText(QString::number(Param::GetInt(Param::curki)));
     ui->VLimMargin->setText(QString::number(Param::GetInt(Param::vlimmargin)));
     ui->VLimFlt->setText(QString::number(Param::GetInt(Param::vlimflt)));
@@ -165,7 +180,7 @@ MainWindow::MainWindow(QWidget *parent) :
     m_Vdc = ui->Vdc->text().toDouble();
     Param::SetFloat(Param::udc, m_Vdc);
 
-    motor = new MotorModel(m_wheelSize,m_gearRatio,m_roadGradient,m_vehicleWeight,m_Lq,m_Ld,m_Rs,m_Poles,m_fluxLinkage,m_timestep,m_syncdelay,m_samplingPoint);
+    motor = new sim::MotorPlant(m_wheelSize,m_gearRatio,m_roadGradient,m_vehicleWeight,m_Lq,m_Ld,m_Rs,m_Poles,m_fluxLinkage,m_timestep,m_syncdelay,m_samplingPoint);
 
     m_time = 0;
     m_old_time = 0;
@@ -237,6 +252,16 @@ MainWindow::MainWindow(QWidget *parent) :
     voltageGraph->addSeries("VLq (V)", left, VVLQ);
     if(settings.contains(ui->cb_MotVolt->objectName())) ui->cb_MotVolt->setChecked(settings.value(ui->cb_MotVolt->objectName()).toBool());
 
+    pwmGraph->setWindowTitle("PWM Modulation");
+    pwmGraph->setAxisText("Time (s)", "Duty", "");
+    pwmGraph->addSeries("Duty A", left, PWM_A);
+    pwmGraph->setColour(Qt::red, PWM_A);
+    pwmGraph->addSeries("Duty B", left, PWM_B);
+    pwmGraph->setColour(Qt::green, PWM_B);
+    pwmGraph->addSeries("Duty C", left, PWM_C);
+    pwmGraph->setColour(Qt::blue, PWM_C);
+    if(settings.contains(ui->cb_Pwm->objectName())) ui->cb_Pwm->setChecked(settings.value(ui->cb_Pwm->objectName()).toBool());
+
     idigGraph->setWindowTitle("Operating Point");
     idigGraph->setAxisText("Id (A)", "Iq (A)", "");
     idigGraph->addSeries("I (A)", left, IDIQAMPS);
@@ -291,7 +316,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
     PwmGeneration::SetOpmode(0);
     PwmGeneration::SetOpmode(ui->opMode->text().toInt());
-    Param::SetInt(Param::dir, ui->direction->text().toInt());
+    Param::SetInt(Param::seldir, ui->direction->text().toInt());
 
     ui->Poles->setText(QString::number(Param::GetInt(Param::polepairs)));
     ui->throttleCurrent->setText(QString::number(Param::GetFloat(Param::throtcur), 'f', 1));
@@ -337,6 +362,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->cb_ContVolt->objectName(), ui->cb_ContVolt->isChecked());
     settings.setValue(ui->cb_MotCurr->objectName(), ui->cb_MotCurr->isChecked());
     settings.setValue(ui->cb_MotVolt->objectName(), ui->cb_MotVolt->isChecked());
+    settings.setValue(ui->cb_Pwm->objectName(), ui->cb_Pwm->isChecked());
     settings.setValue(ui->cb_OpPoint->objectName(), ui->cb_OpPoint->isChecked());
     settings.setValue(ui->cb_PowTorqTime->objectName(), ui->cb_PowTorqTime->isChecked());
     settings.setValue(ui->cb_Simulation->objectName(), ui->cb_Simulation->isChecked());
@@ -347,6 +373,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->cb_MotorPos->objectName(), ui->cb_MotorPos->isChecked());
     settings.setValue(ui->cb_PhaseVolts->objectName(), ui->cb_PhaseVolts->isChecked());
     settings.setValue(ui->rb_OP_Amps->objectName(), ui->rb_OP_Amps->isChecked());
+    settings.setValue(ui->cb_LogCsv->objectName(), ui->cb_LogCsv->isChecked());
 
     motorGraph->saveWinState();
     simulationGraph->saveWinState();
@@ -363,6 +390,13 @@ void MainWindow::runFor(int num_steps)
     double Va = 0;
     double Vb = 0;
     double Vc = 0;
+    double Va_cmd = 0;
+    double Vb_cmd = 0;
+    double Vc_cmd = 0;
+
+    sim::Controller controller;
+    sim::Modulator modulator;
+    sim::InverterSwitchingModel inverter;
 
     if(num_steps<0)
         return;
@@ -371,8 +405,55 @@ void MainWindow::runFor(int num_steps)
     QList<QPointF> listMFreq, listMPos, listContMPos;
     QList<QPointF> listCVa, listCVb, listCVc, listCVq, listCVd, listCIq, listCId, listCifw;//, listCivlim;
     QList<QPointF> listVVd, listVVq, listVVq_bemf, listVVq_dueto_id, listVVd_dueto_iq, listVVq_dueto_Rq, listVVd_dueto_Rd, listVVLd, listVVLq;
+    QList<QPointF> listPwmA, listPwmB, listPwmC;
     QList<QPointF> listIdIq;
     QList<QPointF> listPower, listTorque, listElecPower, listEfficiency;
+
+    QFile logFile;
+    QTextStream logStream;
+    bool logEnabled = ui->cb_LogCsv->isChecked();
+    if(logEnabled)
+    {
+        QDir logDir(QDir::currentPath());
+        if(!logDir.exists("logs") && !logDir.mkpath("logs"))
+        {
+            logEnabled = false;
+        }
+        else
+        {
+            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+            QString logPath = logDir.filePath(QString("logs/run_%1.csv").arg(timestamp));
+            logFile.setFileName(logPath);
+            if(logFile.open(QIODevice::WriteOnly | QIODevice::Text))
+            {
+                logStream.setDevice(&logFile);
+                logStream.setLocale(QLocale::c());
+                logStream.setRealNumberNotation(QTextStream::FixedNotation);
+                logStream.setRealNumberPrecision(6);
+                logStream << "# ipmmotorsim_log_version=1\n";
+                logStream << "# timestamp=" << QDateTime::currentDateTimeUtc().toString(Qt::ISODate) << "\n";
+                logStream << "# timestep_s=" << m_timestep << "\n";
+                logStream << "# loop_freq_hz=" << (m_timestep > 0 ? (1.0 / m_timestep) : 0.0) << "\n";
+                logStream << "# pwmfrq_param=" << Param::GetInt(Param::pwmfrq) << " (" << PWMFRQS << ")\n";
+                logStream << "# vdc=" << m_Vdc << "\n";
+                logStream << "# motor_ld=" << m_Ld << ", motor_lq=" << m_Lq << ", rs=" << m_Rs
+                          << ", poles=" << m_Poles << ", fluxlinkage=" << m_fluxLinkage << "\n";
+                logStream << "# sampling_point=" << m_samplingPoint << ", sync_delay_s=" << m_syncdelay
+                          << ", road_gradient=" << m_roadGradient << "\n";
+                logStream << "time_s,step,pwm_enabled,vdc,"
+                          << "duty_a,duty_b,duty_c,"
+                          << "va_cmd,vb_cmd,vc_cmd,va,vb,vc,"
+                          << "ia,ib,ic,id,iq,"
+                          << "id_ctrl,iq_ctrl,ifw,vd_ctrl,vq_ctrl,"
+                          << "theta_e_deg,rpm,torque_nm,power_w\n";
+                statusBar()->showMessage(QString("Logging to %1").arg(logPath), 5000);
+            }
+            else
+            {
+                logEnabled = false;
+            }
+        }
+    }
 
     //PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat());
     for(int i = 0;i<num_steps; i++)
@@ -395,10 +476,10 @@ void MainWindow::runFor(int num_steps)
                         requestedTorque = RAMPDOWN(m_lastTorqueDemand, requestedTorque, ((m_lastTorqueDemand>=0)?500:50));
                     m_lastTorqueDemand = requestedTorque;
                 }
-                PwmGeneration::SetTorquePercent(((float)(requestedTorque+50))/100);
+                controller.SetTorquePercent(((float)(requestedTorque+50))/100);
             }
             else
-                PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat());
+                controller.SetTorquePercent(ui->torqueDemand->text().toFloat());
         }
 
         //routines that need calling every ms
@@ -408,38 +489,51 @@ void MainWindow::runFor(int num_steps)
             //not used at the moment but left in for future use
         }        
 
-        g_input_angle = (uint16_t)((motor->getElecPosition()*TWO_PI_CONT)/360.0);
-        if(disablePWM)
+        controller.SetRotorAngle((uint16_t)((motor->getElecPosition()*TWO_PI_CONT)/360.0));
+        bool pwmEnabled = controller.PwmEnabled();
+        double il1_input = 0;
+        double il2_input = 0;
+        if(pwmEnabled)
         {
-            g_il1_input = 0;
-            g_il2_input = 0;
-        }
-        else
-        {
-            g_il1_input = (Param::GetFloat(Param::il1gain)*motor->getIaSamp());
-            g_il2_input = (Param::GetFloat(Param::il2gain)*motor->getIbSamp());
+            il1_input = (Param::GetFloat(Param::il1gain)*motor->getIaSamp());
+            il2_input = (Param::GetFloat(Param::il2gain)*motor->getIbSamp());
         }
 
         if(ui->AddNoise->isChecked())
         {
             double noise = ui->NoiseAmp->text().toDouble();
-            g_il1_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
-            g_il2_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
+            il1_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
+            il2_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
         }
 
-        PwmGeneration::Run();
+        controller.SetCurrentInputs(il1_input, il2_input);
+        controller.Run();
 
-        if(disablePWM) //needed to allow OpeinInverter initialisation to complete
+        pwmEnabled = controller.PwmEnabled();
+        sim::DutyCycles duty = modulator.GetDutyCycles();
+        sim::PhaseVoltages voltages;
+        if(!pwmEnabled) //needed to allow OpenInverter initialisation to complete
         {
-            Va = 0;
-            Vb = 0;
-            Vc = 0;
+            voltages = {};
         }
         else
         {
-            Va = (m_Vdc/65536) * (FOC::DutyCycles[0]-32768);
-            Vb = (m_Vdc/65536) * (FOC::DutyCycles[1]-32768);
-            Vc = (m_Vdc/65536) * (FOC::DutyCycles[2]-32768);
+            voltages = inverter.FromDuty(m_Vdc, duty);
+        }
+
+        Va = voltages.a;
+        Vb = voltages.b;
+        Vc = voltages.c;
+
+        Va_cmd = Va;
+        Vb_cmd = Vb;
+        Vc_cmd = Vc;
+
+        if(ui->cb_Pwm->isChecked())
+        {
+            listPwmA.append(QPointF(m_time, duty.a_norm));
+            listPwmB.append(QPointF(m_time, duty.b_norm));
+            listPwmC.append(QPointF(m_time, duty.c_norm));
         }
 
         //add voltages to plot here so that we see the SVM waveforms
@@ -451,10 +545,10 @@ void MainWindow::runFor(int num_steps)
         }
 
         //remove space vector modulation
-        double offset = Va + Vb + Vc;
-        Va = Va - offset/3;
-        Vb = Vb - offset/3;
-        Vc = Vc - offset/3;
+        inverter.RemoveCommonMode(voltages);
+        Va = voltages.a;
+        Vb = voltages.b;
+        Vc = voltages.c;
 
         //one period delay to simulate slow timer reload in target hardware
         if(ui->ExtraCycleDelay->isChecked())
@@ -520,6 +614,23 @@ void MainWindow::runFor(int num_steps)
             efficiency = 100.0 * (motor->getPower()/elec_power);
         }
 
+        if(logEnabled)
+        {
+            const double vd_ctrl = controller.UdVolts(m_Vdc);
+            const double vq_ctrl = controller.UqVolts(m_Vdc);
+            const double rpm = motor->getMotorFreq() * 60.0;
+            logStream << m_time << "," << i << "," << (pwmEnabled ? 1 : 0) << "," << m_Vdc << ","
+                      << duty.a_norm << "," << duty.b_norm << "," << duty.c_norm << ","
+                      << Va_cmd << "," << Vb_cmd << "," << Vc_cmd << ","
+                      << Va << "," << Vb << "," << Vc << ","
+                      << motor->getIaSamp() << "," << motor->getIbSamp() << "," << motor->getIcSamp() << ","
+                      << motor->getId() << "," << motor->getIq() << ","
+                      << controller.Id() << "," << controller.Iq() << "," << controller.Ifw() << ","
+                      << vd_ctrl << "," << vq_ctrl << ","
+                      << motor->getElecPosition() << "," << rpm << "," << motor->getTorque() << "," << motor->getPower()
+                      << "\n";
+        }
+
         if(ui->rb_Speed->isChecked())
         {
             listPower.append(QPointF(motor->getMotorFreq()*60, motor->getPower()/1000));
@@ -575,6 +686,10 @@ void MainWindow::runFor(int num_steps)
     voltageGraph->addDataPoints(listVVLd, VVLD);
     voltageGraph->addDataPoints(listVVLq, VVLQ);
 
+    pwmGraph->addDataPoints(listPwmA, PWM_A);
+    pwmGraph->addDataPoints(listPwmB, PWM_B);
+    pwmGraph->addDataPoints(listPwmC, PWM_C);
+
     idigGraph->addDataPoints(listIdIq, IDIQAMPS);
 
     powerGraph->addDataPoints(listPower, POWER);
@@ -587,6 +702,7 @@ void MainWindow::runFor(int num_steps)
     if(ui->cb_ContVolt->isChecked()) controllerGraph->updateGraph();
     if(ui->cb_ContCurr->isChecked()) debugGraph->updateGraph();
     if(ui->cb_MotVolt->isChecked()) voltageGraph->updateGraph();
+    if(ui->cb_Pwm->isChecked()) pwmGraph->updateGraph();
     if(ui->cb_OpPoint->isChecked()) idigGraph->updateGraph(ui->rb_OP_Amps->isChecked());
     if(ui->cb_PowTorqTime->isChecked()) powerGraph->updateGraph();
 }
@@ -703,6 +819,7 @@ void MainWindow::on_pbRestart_clicked()
     controllerGraph->clearData();
     debugGraph->clearData();
     voltageGraph->clearData();
+    pwmGraph->clearData();
     idigGraph->clearData();
     powerGraph->clearData();
 }
@@ -726,7 +843,7 @@ void MainWindow::on_opMode_editingFinished()
 
 void MainWindow::on_direction_editingFinished()
 {
-    Param::Set(Param::dir, FP_FROMINT(ui->direction->text().toInt()));
+    Param::Set(Param::seldir, FP_FROMINT(ui->direction->text().toInt()));
 }
 
 void MainWindow::on_IqManual_editingFinished()
@@ -741,7 +858,8 @@ void MainWindow::on_IdManual_editingFinished()
 
 void MainWindow::on_CurrentKp_editingFinished()
 {
-    Param::Set(Param::curkp, FP_FROMINT(ui->CurrentKp->text().toInt()));
+    Param::Set(Param::iqkp, FP_FROMINT(ui->CurrentKp->text().toInt()));
+    Param::Set(Param::idkp, FP_FROMINT(ui->CurrentKp->text().toInt()));
 }
 
 void MainWindow::on_CurrentKi_editingFinished()
@@ -867,6 +985,17 @@ void MainWindow::on_cb_MotCurr_toggled(bool checked)
     }
     else
         motorGraph->hide();
+}
+
+void MainWindow::on_cb_Pwm_toggled(bool checked)
+{
+    if(checked)
+    {
+        pwmGraph->updateGraph();
+        pwmGraph->show();
+    }
+    else
+        pwmGraph->hide();
 }
 
 void MainWindow::on_cb_PowTorqTime_toggled(bool checked)

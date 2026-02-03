@@ -46,6 +46,7 @@ void timer_enable_break(uint32_t timer_peripheral) {(void)timer_peripheral;}
 void timer_set_enabled_off_state_in_run_mode(uint32_t timer_peripheral) {(void)timer_peripheral;}
 void timer_set_enabled_off_state_in_idle_mode(uint32_t timer_peripheral) {(void)timer_peripheral;}
 void timer_disable_break_automatic_output(uint32_t timer_peripheral) {(void)timer_peripheral;}
+void timer_disable_break(uint32_t timer_peripheral) {(void)timer_peripheral;}
 void timer_set_deadtime(uint32_t timer_peripheral, uint32_t deadtime) {(void)timer_peripheral;(void)deadtime;}
 void timer_enable_irq(uint32_t timer_peripheral, uint32_t irq) {(void)timer_peripheral;(void)irq;}
 void timer_set_prescaler(uint32_t timer_peripheral, uint32_t value) {(void)timer_peripheral;(void)value;}

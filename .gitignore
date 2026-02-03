@@ -31,6 +31,17 @@
 *.out
 *.app
 
-IPMMotorSim/stm32-sine/
+# Build outputs
+/build/
+/build-mingw/
+/logs/
+
+# Qt Creator/CMake user files
+*.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
 
 

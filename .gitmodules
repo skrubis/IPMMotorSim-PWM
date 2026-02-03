@@ -1,0 +1,3 @@
+[submodule "IPMMotorSim/stm32-sine"]
+	path = IPMMotorSim/stm32-sine
+	url = https://github.com/skrubis/vx-stm32-dpwm.git
