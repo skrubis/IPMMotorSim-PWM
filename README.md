@@ -65,7 +65,7 @@ python tools/plot_quicklook.py <path-to-run.csv>
 - Motor plant remains the legacy average model, so phase current ripple is not yet resolved.
 
 # Current Limitations
-The simulator uses a number of new parameters not yet found in most builds of stm32-sin.  There is a replacement param_prj.h file in the project directory that will be used in place of the one in the subdirectory.  It is up to the user to ensure that the parameters contained in this replacement file are appropriate for whichever versions of the stn32-sine software is being used.
+The simulator uses a number of new parameters not yet found in most builds of stm32-sine.  There is a replacement param_prj.h file in the project directory that will be used in place of the one in the subdirectory.  It is up to the user to ensure that the parameters contained in this replacement file are appropriate for whichever versions of the stn32-sine software is being used.
 
 There is NO field validation on the GUI control fields, if you enter invalid values you will either get invalid simulation results or a program crash.
 
@@ -80,3 +80,5 @@ Please note, as is says in the licence - This program is distributed in the hope
 
 
 For more information on this project please refer to https://openinverter.org/forum/viewtopic.php?t=2611
+And here for DPWM efforts:
+https://openinverter.org/forum/viewtopic.php?t=6928
