@@ -19,6 +19,7 @@
 
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <algorithm>
 #include <QtMath>
 #include <QDateTime>
 #include <QDir>
@@ -80,6 +81,8 @@
 #define PWM_A 1
 #define PWM_B 2
 #define PWM_C 3
+#define PWM_MIN 4
+#define PWM_MAX 5
 
 //Power/Torque graph
 #define POWER 6
@@ -260,6 +263,12 @@ MainWindow::MainWindow(QWidget *parent) :
     pwmGraph->setColour(Qt::green, PWM_B);
     pwmGraph->addSeries("Duty C", left, PWM_C);
     pwmGraph->setColour(Qt::blue, PWM_C);
+    pwmGraph->addSeries("Duty Min", left, PWM_MIN);
+    pwmGraph->setColour(Qt::darkGray, PWM_MIN);
+    pwmGraph->setOpacity(0.6, PWM_MIN);
+    pwmGraph->addSeries("Duty Max", left, PWM_MAX);
+    pwmGraph->setColour(Qt::darkGray, PWM_MAX);
+    pwmGraph->setOpacity(0.6, PWM_MAX);
     if(settings.contains(ui->cb_Pwm->objectName())) ui->cb_Pwm->setChecked(settings.value(ui->cb_Pwm->objectName()).toBool());
 
     idigGraph->setWindowTitle("Operating Point");
@@ -405,7 +414,7 @@ void MainWindow::runFor(int num_steps)
     QList<QPointF> listMFreq, listMPos, listContMPos;
     QList<QPointF> listCVa, listCVb, listCVc, listCVq, listCVd, listCIq, listCId, listCifw;//, listCivlim;
     QList<QPointF> listVVd, listVVq, listVVq_bemf, listVVq_dueto_id, listVVd_dueto_iq, listVVq_dueto_Rq, listVVd_dueto_Rd, listVVLd, listVVLq;
-    QList<QPointF> listPwmA, listPwmB, listPwmC;
+    QList<QPointF> listPwmA, listPwmB, listPwmC, listPwmMin, listPwmMax;
     QList<QPointF> listIdIq;
     QList<QPointF> listPower, listTorque, listElecPower, listEfficiency;
 
@@ -534,6 +543,10 @@ void MainWindow::runFor(int num_steps)
             listPwmA.append(QPointF(m_time, duty.a_norm));
             listPwmB.append(QPointF(m_time, duty.b_norm));
             listPwmC.append(QPointF(m_time, duty.c_norm));
+            const double dutyMin = std::min(duty.a_norm, std::min(duty.b_norm, duty.c_norm));
+            const double dutyMax = std::max(duty.a_norm, std::max(duty.b_norm, duty.c_norm));
+            listPwmMin.append(QPointF(m_time, dutyMin));
+            listPwmMax.append(QPointF(m_time, dutyMax));
         }
 
         //add voltages to plot here so that we see the SVM waveforms
@@ -689,6 +702,8 @@ void MainWindow::runFor(int num_steps)
     pwmGraph->addDataPoints(listPwmA, PWM_A);
     pwmGraph->addDataPoints(listPwmB, PWM_B);
     pwmGraph->addDataPoints(listPwmC, PWM_C);
+    pwmGraph->addDataPoints(listPwmMin, PWM_MIN);
+    pwmGraph->addDataPoints(listPwmMax, PWM_MAX);
 
     idigGraph->addDataPoints(listIdIq, IDIQAMPS);
 
