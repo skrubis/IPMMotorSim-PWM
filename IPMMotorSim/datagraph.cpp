@@ -67,6 +67,11 @@ void DataGraph::setAxisText(QString x, QString left, QString right)
     m_axisR->setTitleText(right);
 }
 
+void DataGraph::setLegendVisible(bool visible)
+{
+    m_chart->legend()->setVisible(visible);
+}
+
 void DataGraph::saveWinState()
 {
     QSettings settings("OpenInverter", "IPMMotorSim");

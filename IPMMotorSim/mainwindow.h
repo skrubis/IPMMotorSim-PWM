@@ -166,6 +166,7 @@ private slots:
     void on_startRpm_editingFinished();
     void on_modBlend_editingFinished();
     void on_modBlendSlider_valueChanged(int value);
+    void on_cb_ShowLegends_toggled(bool checked);
 
     void on_rb_Speed_toggled(bool checked);
 
@@ -184,6 +185,9 @@ private slots:
 private:
     Ui::MainWindow *ui;
     void closeEvent(QCloseEvent *bar);
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 };
 
 #endif // MAINWINDOW_H

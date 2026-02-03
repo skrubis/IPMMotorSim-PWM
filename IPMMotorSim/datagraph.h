@@ -46,6 +46,7 @@ public:
     void setColour(QColor colour, int key);
     void setOpacity(qreal opacity, int key);
     void setAxisText(QString x, QString left, QString right);
+    void setLegendVisible(bool visible);
 
 private:
     Chart *m_chart;

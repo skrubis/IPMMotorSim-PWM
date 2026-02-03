@@ -23,13 +23,21 @@
 #include <QtMath>
 #include <QDateTime>
 #include <QDoubleValidator>
+#include <QEvent>
 #include <QDir>
 #include <QFile>
+#include <QAction>
+#include <QHelpEvent>
 #include <QIntValidator>
+#include <QFormLayout>
+#include <QLabel>
 #include <QLocale>
 #include <QRandomGenerator>
 #include <QSettings>
 #include <QTextStream>
+#include <QToolTip>
+#include <QApplication>
+#include <QCursor>
 #include "pwmgeneration.h"
 #include "foc.h"
 #include "params.h"
@@ -119,6 +127,7 @@ MainWindow::MainWindow(QWidget *parent) :
     ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+    setAttribute(Qt::WA_AlwaysShowToolTips, true);
 
     QSettings settings("OpenInverter", "IPMMotorSim");
     restoreGeometry(settings.value("mainwin/geometry").toByteArray());
@@ -148,6 +157,7 @@ MainWindow::MainWindow(QWidget *parent) :
     if(settings.contains(ui->cb_PwmClamp->objectName())) ui->cb_PwmClamp->setChecked(settings.value(ui->cb_PwmClamp->objectName()).toBool());
     if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
     if(settings.contains(ui->cb_PwmSector->objectName())) ui->cb_PwmSector->setChecked(settings.value(ui->cb_PwmSector->objectName()).toBool());
+    if(settings.contains(ui->cb_ShowLegends->objectName())) ui->cb_ShowLegends->setChecked(settings.value(ui->cb_ShowLegends->objectName()).toBool());
     if(settings.contains(ui->modulationMode->objectName()))
         ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
 
@@ -159,6 +169,112 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->modBlendSlider->setRange(0, 100);
     ui->modBlendSlider->setValue(static_cast<int>(ui->modBlend->text().toDouble() * 100.0));
     ui->modBlendValue->setText(QString::number(ui->modBlend->text().toDouble(), 'f', 3));
+
+    qApp->installEventFilter(this);
+
+    auto tip = [](QWidget* w, const QString& text)
+    {
+        if(!w) return;
+        w->setToolTip(text);
+        w->setWhatsThis(text);
+        w->setStatusTip(text);
+        w->setToolTipDuration(10000);
+    };
+
+    tip(ui->vehicleWeight, "Vehicle mass in kg used in the simple load model.");
+    tip(ui->wheelSize, "Wheel radius in meters. Used to convert torque to force and speed.");
+    tip(ui->gearRatio, "Overall gear ratio from motor to wheel.");
+    tip(ui->Vdc, "DC bus voltage in volts.");
+    tip(ui->Lq, "Quadrature-axis inductance in mH.");
+    tip(ui->Ld, "Direct-axis inductance in mH.");
+    tip(ui->Rs, "Stator phase resistance in ohms.");
+    tip(ui->FluxLinkage, "Flux linkage in mWeber (psi).");
+    tip(ui->SyncDelay, "Electrical sync delay in microseconds (sampling/angle delay).");
+    tip(ui->LoopFreq, "Control loop frequency in Hz.");
+    tip(ui->SamplingPoint, "Current sampling point within the PWM period (percent).");
+    tip(ui->NoiseAmp, "Injected current measurement noise amplitude (A).");
+    tip(ui->RoadGradient, "Road gradient percent. Positive is uphill.");
+    tip(ui->ThrotRamps, "Enable throttle ramping to simulate rate limits.");
+    tip(ui->ExtraCycleDelay, "Adds one PWM cycle delay to voltages.");
+    tip(ui->AddNoise, "Enable noise on current feedback inputs.");
+    tip(ui->runTime, "Duration for Run For (s).");
+    tip(ui->startRpm, "Initial mechanical speed (RPM), applied on Restart.");
+    tip(ui->torqueDemand, "Torque demand in percent.");
+    tip(ui->throttleCurrent, "Current per percent throttle (A/%).");
+    tip(ui->opMode, "Controller mode: 1=Run, 2=Manual.");
+    tip(ui->direction, "Direction: -1 reverse, 0 neutral, 1 forward.");
+    tip(ui->IqManual, "Manual q-axis current command (A).");
+    tip(ui->IdManual, "Manual d-axis current command (A).");
+    tip(ui->Poles, "Motor pole pairs.");
+    tip(ui->CurrentKp, "Current controller proportional gain.");
+    tip(ui->CurrentKi, "Current controller integral gain.");
+    tip(ui->VLimMargin, "Voltage limit margin (firmware units).");
+    tip(ui->VLimFlt, "Voltage limit filter (firmware units).");
+    tip(ui->LqMinusLd, "Lq - Ld in mH (for MTPA).");
+    tip(ui->SyncAdv, "Electrical angle advance (dig/Hz).");
+    tip(ui->SyncOfs, "Electrical angle offset (dig).");
+    tip(ui->FWCurrMax, "Field weakening current limit (A, typically negative).");
+    tip(ui->FreqMax, "Maximum electrical frequency (Hz).");
+
+    tip(ui->modulationMode, "Select modulation. Firmware uses stm32-sine PWM. Others use simulator modulator.");
+    tip(ui->modBlend, "Blend between SVPWM (0) and clamped DPWM (1).");
+    tip(ui->modBlendSlider, "Blend between SVPWM (0) and clamped DPWM (1).");
+    tip(ui->modBlendValue, "Current blend value (read-only).");
+
+    tip(ui->cb_OpPoint, "Show operating point (Id/Iq) window.");
+    tip(ui->cb_Simulation, "Show simulation window.");
+    tip(ui->cb_ContVolt, "Show controller voltage window.");
+    tip(ui->cb_ContCurr, "Show controller current window.");
+    tip(ui->cb_MotVolt, "Show motor voltage window.");
+    tip(ui->cb_MotCurr, "Show motor current window.");
+    tip(ui->cb_PowTorqTime, "Show power/torque window.");
+    tip(ui->cb_Pwm, "Show PWM modulation window.");
+    tip(ui->cb_PwmZeroSeq, "Show zero-sequence component of modulation.");
+    tip(ui->cb_PwmClamp, "Show clamped leg indicator (-1 low, +1 high).");
+    tip(ui->cb_PwmTiming, "Show T1/T2/T0 timing components.");
+    tip(ui->cb_PwmSector, "Show SVPWM sector (1-6).");
+    tip(ui->cb_ShowLegends, "Toggle graph legends on/off.");
+    tip(ui->cb_MotorPos, "Include motor position in simulation graph.");
+    tip(ui->cb_PhaseVolts, "Include phase voltages in controller volt graph.");
+    tip(ui->cb_PhaseCurrs, "Include phase currents in motor current graph.");
+    tip(ui->cb_Efficiency, "Include efficiency in power graph.");
+    tip(ui->cb_LogCsv, "Write CSV log for each run.");
+
+    const auto formLayouts = findChildren<QFormLayout*>();
+    for(QFormLayout* form : formLayouts)
+    {
+        if(!form) continue;
+        for(int row = 0; row < form->rowCount(); ++row)
+        {
+            QLayoutItem* labelItem = form->itemAt(row, QFormLayout::LabelRole);
+            QLayoutItem* fieldItem = form->itemAt(row, QFormLayout::FieldRole);
+            QWidget* labelWidget = labelItem ? labelItem->widget() : nullptr;
+            QWidget* fieldWidget = fieldItem ? fieldItem->widget() : nullptr;
+            if(!labelWidget || !fieldWidget) continue;
+            if(!labelWidget->toolTip().isEmpty()) continue;
+            if(fieldWidget->toolTip().isEmpty()) continue;
+            labelWidget->setToolTip(fieldWidget->toolTip());
+            labelWidget->setWhatsThis(fieldWidget->toolTip());
+            labelWidget->setStatusTip(fieldWidget->toolTip());
+            labelWidget->setToolTipDuration(10000);
+        }
+    }
+
+    const auto labels = findChildren<QLabel*>();
+    for(QLabel* label : labels)
+    {
+        if(!label || !label->toolTip().isEmpty()) continue;
+        if(QWidget* buddy = label->buddy())
+        {
+            if(!buddy->toolTip().isEmpty())
+            {
+                label->setToolTip(buddy->toolTip());
+                label->setWhatsThis(buddy->toolTip());
+                label->setStatusTip(buddy->toolTip());
+                label->setToolTipDuration(10000);
+            }
+        }
+    }
 
     motorGraph = new DataGraph("motor", this);
     simulationGraph = new DataGraph("sim", this);
@@ -325,6 +441,7 @@ MainWindow::MainWindow(QWidget *parent) :
     on_cb_PwmClamp_toggled(ui->cb_PwmClamp->isChecked());
     on_cb_PwmTiming_toggled(ui->cb_PwmTiming->isChecked());
     on_cb_PwmSector_toggled(ui->cb_PwmSector->isChecked());
+    on_cb_ShowLegends_toggled(ui->cb_ShowLegends->isChecked());
 
     idigGraph->setWindowTitle("Operating Point");
     idigGraph->setAxisText("Id (A)", "Iq (A)", "");
@@ -434,6 +551,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->cb_PwmClamp->objectName(), ui->cb_PwmClamp->isChecked());
     settings.setValue(ui->cb_PwmTiming->objectName(), ui->cb_PwmTiming->isChecked());
     settings.setValue(ui->cb_PwmSector->objectName(), ui->cb_PwmSector->isChecked());
+    settings.setValue(ui->cb_ShowLegends->objectName(), ui->cb_ShowLegends->isChecked());
     settings.setValue(ui->cb_OpPoint->objectName(), ui->cb_OpPoint->isChecked());
     settings.setValue(ui->cb_PowTorqTime->objectName(), ui->cb_PowTorqTime->isChecked());
     settings.setValue(ui->cb_Simulation->objectName(), ui->cb_Simulation->isChecked());
@@ -454,6 +572,68 @@ void MainWindow::closeEvent(QCloseEvent *event)
     idigGraph->saveWinState();
     powerGraph->saveWinState();
     QWidget::closeEvent(event);
+}
+
+static QString helpTextFor(QObject* obj)
+{
+    if(auto action = qobject_cast<QAction*>(obj))
+    {
+        if(!action->toolTip().isEmpty()) return action->toolTip();
+        if(!action->statusTip().isEmpty()) return action->statusTip();
+    }
+
+    if(auto widget = qobject_cast<QWidget*>(obj))
+    {
+        if(!widget->toolTip().isEmpty()) return widget->toolTip();
+        if(!widget->statusTip().isEmpty()) return widget->statusTip();
+    }
+
+    if(QWidget* widget = QApplication::widgetAt(QCursor::pos()))
+    {
+        if(!widget->toolTip().isEmpty()) return widget->toolTip();
+        if(!widget->statusTip().isEmpty()) return widget->statusTip();
+    }
+
+    return QString();
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    const QString helpText = helpTextFor(obj);
+    if(helpText.isEmpty())
+        return QMainWindow::eventFilter(obj, event);
+
+    switch(event->type())
+    {
+        case QEvent::ToolTip:
+        {
+            const QHelpEvent* helpEvent = static_cast<QHelpEvent*>(event);
+            const QPoint globalPos = helpEvent ? helpEvent->globalPos() : QCursor::pos();
+            QToolTip::showText(globalPos, helpText, nullptr);
+            statusBar()->showMessage(helpText);
+            break;
+        }
+        case QEvent::Enter:
+        case QEvent::HoverEnter:
+        case QEvent::HoverMove:
+        case QEvent::FocusIn:
+            QToolTip::showText(QCursor::pos(), helpText, nullptr);
+            statusBar()->showMessage(helpText);
+            break;
+        case QEvent::Leave:
+        case QEvent::HoverLeave:
+        case QEvent::FocusOut:
+            QToolTip::hideText();
+            statusBar()->clearMessage();
+            break;
+        case QEvent::StatusTip:
+            statusBar()->showMessage(helpText);
+            break;
+        default:
+            break;
+    }
+
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::runFor(int num_steps)
@@ -1189,6 +1369,26 @@ void MainWindow::on_cb_PwmSector_toggled(bool checked)
     pwmGraph->setOpacity(checked ? 0.6 : 0.0, PWM_SECTOR);
     if(ui->cb_Pwm->isChecked())
         pwmGraph->updateGraph();
+}
+
+void MainWindow::on_cb_ShowLegends_toggled(bool checked)
+{
+    motorGraph->setLegendVisible(checked);
+    simulationGraph->setLegendVisible(checked);
+    controllerGraph->setLegendVisible(checked);
+    debugGraph->setLegendVisible(checked);
+    voltageGraph->setLegendVisible(checked);
+    pwmGraph->setLegendVisible(checked);
+    idigGraph->setLegendVisible(checked);
+    powerGraph->setLegendVisible(checked);
+    if(ui->cb_MotCurr->isChecked()) motorGraph->updateGraph();
+    if(ui->cb_Simulation->isChecked()) simulationGraph->updateGraph();
+    if(ui->cb_ContVolt->isChecked()) controllerGraph->updateGraph();
+    if(ui->cb_ContCurr->isChecked()) debugGraph->updateGraph();
+    if(ui->cb_MotVolt->isChecked()) voltageGraph->updateGraph();
+    if(ui->cb_Pwm->isChecked()) pwmGraph->updateGraph();
+    if(ui->cb_OpPoint->isChecked()) idigGraph->updateGraph(ui->rb_OP_Amps->isChecked());
+    if(ui->cb_PowTorqTime->isChecked()) powerGraph->updateGraph();
 }
 
 void MainWindow::on_cb_PowTorqTime_toggled(bool checked)
