@@ -21,9 +21,12 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QHash>
+#include <QVector>
 #include "datagraph.h"
 #include "idiqgraph.h"
 #include "sim/motor_plant.h"
+#include "sim/power_module.h"
 
 
 
@@ -36,8 +39,40 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 private:
+    struct PowerStagePreset
+    {
+        QString key;
+        QString label;
+        bool has_deadtime_us = false;
+        double deadtime_us = 0.0;
+        bool has_vref_v = false;
+        double vref_v = 0.0;
+        bool has_kv = false;
+        double kv = 0.0;
+        bool has_diode_vf_25 = false;
+        double diode_vf_25 = 0.0;
+        bool has_diode_vf_125 = false;
+        double diode_vf_125 = 0.0;
+        bool has_rth_jc_igbt = false;
+        double rth_jc_igbt = 0.0;
+        bool has_rth_jc_diode = false;
+        double rth_jc_diode = 0.0;
+        bool has_rth_cs = false;
+        double rth_cs = 0.0;
+        QVector<sim::CurvePoint> vce_points;
+        QVector<sim::CurvePoint> eon_points;
+        QVector<sim::CurvePoint> eoff_points;
+        QVector<sim::CurvePoint> irr_points;
+        QVector<sim::CurvePoint> trr_points;
+    };
+
     void runFor(int num_steps);
     void calcFluxLinkage(void);
+    void loadPowerStagePresets();
+    QString resolvePowerStageYamlPath() const;
+    const PowerStagePreset* findPowerStagePreset(const QString& key) const;
+    void applyPowerStagePreset(const PowerStagePreset& preset);
+    QString currentPowerStagePresetKey() const;
 
     DataGraph *motorGraph;
     DataGraph *simulationGraph;
@@ -73,6 +108,8 @@ private:
 
     double m_runTime;
     int m_lastTorqueDemand;
+    QVector<PowerStagePreset> m_powerStagePresets;
+    QHash<QString, int> m_powerStagePresetByKey;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -186,6 +223,7 @@ private slots:
     void on_FWCurrMax_editingFinished();
 
     void on_rb_OP_Amps_toggled(bool checked);
+    void on_powerStagePreset_currentIndexChanged(int index);
 
 private:
     Ui::MainWindow *ui;

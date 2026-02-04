@@ -23,10 +23,12 @@
 #include <cmath>
 #include <QtMath>
 #include <QDateTime>
+#include <QCoreApplication>
 #include <QDoubleValidator>
 #include <QEvent>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QAction>
 #include <QHelpEvent>
 #include <QIntValidator>
@@ -35,6 +37,7 @@
 #include <QLocale>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QSignalBlocker>
 #include <QSettings>
 #include <QTextStream>
 #include <QToolTip>
@@ -42,6 +45,7 @@
 #include <QCursor>
 #include <QGuiApplication>
 #include <QScreen>
+#include <limits>
 #include "pwmgeneration.h"
 #include "foc.h"
 #include "params.h"
@@ -174,6 +178,239 @@ static std::array<sim::CurvePoint, N> ParseCurvePoints(const QString& text,
 
     return out;
 }
+
+namespace
+{
+struct YamlFrame
+{
+    int indent = 0;
+    QString key;
+};
+
+struct TempPoint
+{
+    double v25 = std::numeric_limits<double>::quiet_NaN();
+    double v125 = std::numeric_limits<double>::quiet_NaN();
+};
+
+static QString StripComments(const QString& line)
+{
+    const int idx = line.indexOf('#');
+    if (idx >= 0)
+        return line.left(idx);
+    return line;
+}
+
+static int LeadingSpaces(const QString& line)
+{
+    int count = 0;
+    for (int i = 0; i < line.size(); ++i)
+    {
+        if (line[i] == ' ')
+            ++count;
+        else if (line[i] == '\t')
+            count += 2;
+        else
+            break;
+    }
+    return count;
+}
+
+static QVector<double> ParseInlineList(QString text)
+{
+    text = text.trimmed();
+    if (text.startsWith('['))
+        text = text.mid(1);
+    if (text.endsWith(']'))
+        text.chop(1);
+    QVector<double> values;
+    const auto parts = text.split(',', Qt::SkipEmptyParts);
+    for (const QString& part : parts)
+    {
+        bool ok = false;
+        const double val = part.trimmed().toDouble(&ok);
+        if (ok)
+            values.append(val);
+    }
+    return values;
+}
+
+static QMap<QString, double> ParseInlineMap(QString text)
+{
+    text = text.trimmed();
+    if (text.startsWith('{'))
+        text = text.mid(1);
+    if (text.endsWith('}'))
+        text.chop(1);
+    QMap<QString, double> values;
+    const auto parts = text.split(',', Qt::SkipEmptyParts);
+    for (const QString& part : parts)
+    {
+        const int colon = part.indexOf(':');
+        if (colon <= 0)
+            continue;
+        const QString key = part.left(colon).trimmed();
+        const QString valueText = part.mid(colon + 1).trimmed();
+        bool ok = false;
+        const double val = valueText.toDouble(&ok);
+        if (ok)
+            values.insert(key, val);
+    }
+    return values;
+}
+
+static QString HumanizeKey(const QString& key)
+{
+    QString out = key;
+    out.replace('_', ' ');
+    if (!out.isEmpty())
+        out[0] = out[0].toUpper();
+    return out;
+}
+
+static double PickTempValue(const QMap<double, double>& values, double target, double fallback)
+{
+    if (values.isEmpty())
+        return fallback;
+    if (values.contains(target))
+        return values.value(target);
+    double bestTemp = values.firstKey();
+    double bestDiff = std::abs(bestTemp - target);
+    for (auto it = values.begin(); it != values.end(); ++it)
+    {
+        const double diff = std::abs(it.key() - target);
+        if (diff < bestDiff)
+        {
+            bestDiff = diff;
+            bestTemp = it.key();
+        }
+    }
+    return values.value(bestTemp, fallback);
+}
+
+static QVector<sim::CurvePoint> NormalizeCurvePoints(QVector<sim::CurvePoint> points)
+{
+    for (auto& point : points)
+    {
+        if (std::isnan(point.val_25C) && !std::isnan(point.val_125C))
+            point.val_25C = point.val_125C;
+        if (std::isnan(point.val_125C) && !std::isnan(point.val_25C))
+            point.val_125C = point.val_25C;
+        if (std::isnan(point.val_25C))
+            point.val_25C = 0.0;
+        if (std::isnan(point.val_125C))
+            point.val_125C = point.val_25C;
+    }
+
+    std::sort(points.begin(), points.end(),
+              [](const sim::CurvePoint& a, const sim::CurvePoint& b)
+              {
+                  return a.current_A < b.current_A;
+              });
+
+    QVector<sim::CurvePoint> merged;
+    const double eps = 1e-6;
+    for (const auto& point : points)
+    {
+        if (!merged.isEmpty() && std::abs(point.current_A - merged.last().current_A) < eps)
+        {
+            merged.last().val_25C = point.val_25C;
+            merged.last().val_125C = point.val_125C;
+        }
+        else
+        {
+            merged.append(point);
+        }
+    }
+    points = merged;
+
+    if (points.isEmpty())
+        return points;
+
+    if (points.front().current_A > 0.0)
+        points.prepend({0.0, 0.0, 0.0});
+
+    if (points.size() == 1)
+    {
+        const double i0 = points[0].current_A;
+        const double i1 = (i0 > 0.0) ? (i0 * 2.0) : 1.0;
+        const double scale = (i0 > 0.0) ? (i1 / i0) : 1.0;
+        points.append({i1, points[0].val_25C * scale, points[0].val_125C * scale});
+    }
+
+    return points;
+}
+
+static QVector<sim::CurvePoint> ResampleCurvePoints(const QVector<sim::CurvePoint>& raw, int count)
+{
+    QVector<sim::CurvePoint> points = NormalizeCurvePoints(raw);
+    if (points.isEmpty() || count <= 0)
+        return {};
+    if (points.size() == 1 || count == 1)
+        return {points.front()};
+
+    const double start = points.front().current_A;
+    double end = points.back().current_A;
+    if (end <= start)
+        end = start + 1.0;
+
+    auto interp = [&](double x, bool use125)
+    {
+        if (x <= points.front().current_A)
+            return use125 ? points.front().val_125C : points.front().val_25C;
+        if (x >= points.back().current_A)
+            return use125 ? points.back().val_125C : points.back().val_25C;
+        for (int idx = 1; idx < points.size(); ++idx)
+        {
+            const auto& p0 = points[idx - 1];
+            const auto& p1 = points[idx];
+            if (x <= p1.current_A)
+            {
+                const double t = (x - p0.current_A) / (p1.current_A - p0.current_A);
+                const double v0 = use125 ? p0.val_125C : p0.val_25C;
+                const double v1 = use125 ? p1.val_125C : p1.val_25C;
+                return v0 + t * (v1 - v0);
+            }
+        }
+        return use125 ? points.back().val_125C : points.back().val_25C;
+    };
+
+    QVector<sim::CurvePoint> out;
+    out.reserve(count);
+    for (int idx = 0; idx < count; ++idx)
+    {
+        const double t = count > 1 ? (static_cast<double>(idx) / (count - 1)) : 0.0;
+        const double current = start + (end - start) * t;
+        const double v25 = interp(current, false);
+        const double v125 = interp(current, true);
+        out.append({current, v25, v125});
+    }
+    return out;
+}
+
+static QString FormatNumber(double value, int decimals)
+{
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) < 1e-6)
+        return QString::number(rounded, 'f', 0);
+    return QString::number(value, 'f', decimals);
+}
+
+static QString FormatCurvePointsText(const QVector<sim::CurvePoint>& raw, int count)
+{
+    const QVector<sim::CurvePoint> points = ResampleCurvePoints(raw, count);
+    QStringList lines;
+    lines.reserve(points.size());
+    for (const auto& point : points)
+    {
+        const QString current = FormatNumber(point.current_A, 3);
+        const QString v25 = QString::number(point.val_25C, 'f', 3);
+        const QString v125 = QString::number(point.val_125C, 'f', 3);
+        lines.append(QString("%1, %2, %3").arg(current, v25, v125));
+    }
+    return lines.join('\n');
+}
+} // namespace
 
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -310,6 +547,7 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->eoffPoints, "IGBT Eoff curve points: I, 25C, 125C (mJ) per line.");
     tip(ui->irrPoints, "Diode reverse recovery current points: I, 25C, 125C (A) per line.");
     tip(ui->trrPoints, "Diode reverse recovery time points: I, 25C, 125C (us) per line.");
+    tip(ui->powerStagePreset, "Select a preset from powerstages.yaml to load power-stage parameters.");
     tip(ui->torqueDemand, "Torque demand in percent.");
     tip(ui->throttleCurrent, "Current per percent throttle (A/%).");
     tip(ui->opMode, "Controller mode: 1=Run, 2=Manual.");
@@ -387,6 +625,8 @@ MainWindow::MainWindow(QWidget *parent) :
             }
         }
     }
+
+    loadPowerStagePresets();
 
     motorGraph = new DataGraph("motor", this);
     simulationGraph = new DataGraph("sim", this);
@@ -684,6 +924,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->ThrotRamps->objectName(), ui->ThrotRamps->isChecked());
     settings.setValue(ui->RoadGradient->objectName(), ui->RoadGradient->text());
     settings.setValue(ui->modulationMode->objectName(), ui->modulationMode->currentIndex());
+    settings.setValue("powerStagePreset", currentPowerStagePresetKey());
 
     settings.setValue(ui->cb_ContCurr->objectName(), ui->cb_ContCurr->isChecked());
     settings.setValue(ui->cb_ContVolt->objectName(), ui->cb_ContVolt->isChecked());
@@ -781,6 +1022,578 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     return QMainWindow::eventFilter(obj, event);
 }
 
+QString MainWindow::resolvePowerStageYamlPath() const
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        QDir(QDir::currentPath()).filePath("powerstages.yaml"),
+        QDir(appDir).filePath("powerstages.yaml"),
+        QDir(appDir).filePath("../powerstages.yaml"),
+        QDir(appDir).filePath("../../powerstages.yaml")
+    };
+    for (const QString& path : candidates)
+    {
+        if (QFileInfo::exists(path))
+            return QDir::cleanPath(path);
+    }
+    return QString();
+}
+
+const MainWindow::PowerStagePreset* MainWindow::findPowerStagePreset(const QString& key) const
+{
+    const auto it = m_powerStagePresetByKey.find(key);
+    if (it == m_powerStagePresetByKey.end())
+        return nullptr;
+    const int idx = it.value();
+    if (idx < 0 || idx >= m_powerStagePresets.size())
+        return nullptr;
+    return &m_powerStagePresets[idx];
+}
+
+QString MainWindow::currentPowerStagePresetKey() const
+{
+    if (!ui || !ui->powerStagePreset)
+        return QString();
+    return ui->powerStagePreset->currentData().toString();
+}
+
+void MainWindow::applyPowerStagePreset(const PowerStagePreset& preset)
+{
+    if (!ui)
+        return;
+
+    if (preset.has_deadtime_us)
+    {
+        ui->deadtimeUs->setText(QString::number(preset.deadtime_us, 'f', 3));
+        on_deadtimeUs_editingFinished();
+    }
+    if (preset.has_vref_v)
+        ui->vrefV->setText(QString::number(preset.vref_v, 'f', 1));
+    if (preset.has_kv)
+        ui->kvExp->setText(QString::number(preset.kv, 'f', 2));
+    if (preset.has_diode_vf_25)
+        ui->diodeVf25->setText(QString::number(preset.diode_vf_25, 'f', 3));
+    if (preset.has_diode_vf_125)
+        ui->diodeVf125->setText(QString::number(preset.diode_vf_125, 'f', 3));
+    if (preset.has_rth_jc_igbt)
+        ui->rthJcIgbt->setText(QString::number(preset.rth_jc_igbt, 'f', 4));
+    if (preset.has_rth_jc_diode)
+        ui->rthJcDiode->setText(QString::number(preset.rth_jc_diode, 'f', 4));
+    if (preset.has_rth_cs)
+        ui->rthCs->setText(QString::number(preset.rth_cs, 'f', 4));
+
+    if (!preset.vce_points.isEmpty())
+        ui->vcePoints->setPlainText(FormatCurvePointsText(preset.vce_points, 4));
+    if (!preset.eon_points.isEmpty())
+        ui->eonPoints->setPlainText(FormatCurvePointsText(preset.eon_points, 3));
+    if (!preset.eoff_points.isEmpty())
+        ui->eoffPoints->setPlainText(FormatCurvePointsText(preset.eoff_points, 3));
+    if (!preset.irr_points.isEmpty())
+        ui->irrPoints->setPlainText(FormatCurvePointsText(preset.irr_points, 3));
+    if (!preset.trr_points.isEmpty())
+        ui->trrPoints->setPlainText(FormatCurvePointsText(preset.trr_points, 3));
+}
+
+void MainWindow::loadPowerStagePresets()
+{
+    if (!ui || !ui->powerStagePreset)
+        return;
+
+    m_powerStagePresets.clear();
+    m_powerStagePresetByKey.clear();
+
+    const QString yamlPath = resolvePowerStageYamlPath();
+    if (yamlPath.isEmpty())
+    {
+        QSignalBlocker blocker(ui->powerStagePreset);
+        ui->powerStagePreset->clear();
+        ui->powerStagePreset->addItem("Missing powerstages.yaml", QString());
+        ui->powerStagePreset->setEnabled(false);
+        return;
+    }
+
+    QFile file(yamlPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        QSignalBlocker blocker(ui->powerStagePreset);
+        ui->powerStagePreset->clear();
+        ui->powerStagePreset->addItem("Unable to read powerstages.yaml", QString());
+        ui->powerStagePreset->setEnabled(false);
+        return;
+    }
+
+    struct PresetBuilder
+    {
+        PowerStagePreset preset;
+        double max_current_A = 0.0;
+        double reference_current_A = 0.0;
+        QMap<double, TempPoint> vce_by_current;
+        QVector<sim::CurvePoint> vce_points_raw;
+        QMap<double, double> diode_vf_by_temp;
+        QVector<sim::CurvePoint> eon_points_raw;
+        QVector<sim::CurvePoint> eoff_points_raw;
+        QVector<sim::CurvePoint> irr_points_raw;
+        QVector<sim::CurvePoint> trr_points_raw;
+        QMap<double, double> eon_by_temp;
+        QMap<double, double> eoff_by_temp;
+        QMap<double, double> irr_by_temp;
+        QMap<double, double> trr_by_temp;
+        QMap<double, double> qr_by_temp;
+        QMap<double, double> irm_by_temp;
+
+        void noteCurrent(double current)
+        {
+            if (current > max_current_A)
+                max_current_A = current;
+            if (reference_current_A <= 0.0)
+                reference_current_A = current;
+        }
+    };
+
+    QVector<PresetBuilder> builders;
+    QHash<QString, int> builderIndex;
+
+    auto builderForStack = [&](const QVector<YamlFrame>& stack) -> PresetBuilder*
+    {
+        if (stack.size() < 2 || stack[0].key != "presets")
+            return nullptr;
+        const QString presetKey = stack[1].key;
+        if (!builderIndex.contains(presetKey))
+        {
+            PresetBuilder builder;
+            builder.preset.key = presetKey;
+            builder.preset.label = HumanizeKey(presetKey);
+            builderIndex.insert(presetKey, builders.size());
+            builders.append(builder);
+        }
+        return &builders[builderIndex.value(presetKey)];
+    };
+
+    auto pathFromStack = [](const QVector<YamlFrame>& stack)
+    {
+        QStringList parts;
+        parts.reserve(stack.size());
+        for (const auto& frame : stack)
+            parts.append(frame.key);
+        return parts.join('.');
+    };
+
+    auto tempBucket = [](double tj_C)
+    {
+        return (tj_C >= 100.0) ? 125.0 : 25.0;
+    };
+
+    const QStringList lines = QString::fromUtf8(file.readAll()).split('\n');
+    QVector<YamlFrame> stack;
+    for (const QString& rawLine : lines)
+    {
+        const QString stripped = StripComments(rawLine);
+        if (stripped.trimmed().isEmpty())
+            continue;
+        const int indent = LeadingSpaces(stripped);
+        const QString trimmed = stripped.trimmed();
+
+        if (trimmed.startsWith('-'))
+        {
+            PresetBuilder* builder = builderForStack(stack);
+            if (!builder)
+                continue;
+            const QString path = pathFromStack(stack);
+            const QString item = trimmed.mid(1).trimmed();
+            if (item.startsWith('{'))
+            {
+                const auto map = ParseInlineMap(item);
+                if (path.endsWith("conduction.igbt_vce_sat"))
+                {
+                    const double current = map.value("ic_A", 0.0);
+                    const double tj = map.value("tj_C", 25.0);
+                    const double vce = map.value("v_typ_V", map.value("v_max_V", 0.0));
+                    if (current > 0.0 && vce > 0.0)
+                    {
+                        builder->noteCurrent(current);
+                        TempPoint& point = builder->vce_by_current[current];
+                        if (tempBucket(tj) < 50.0)
+                            point.v25 = vce;
+                        else
+                            point.v125 = vce;
+                    }
+                }
+                else if (path.endsWith("conduction.igbt_vce_sat_at_400A"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double vce = map.value("v_typ_V", map.value("v_max_V", 0.0));
+                    if (vce > 0.0)
+                    {
+                        const double current = 400.0;
+                        builder->noteCurrent(current);
+                        TempPoint& point = builder->vce_by_current[current];
+                        if (tempBucket(tj) < 50.0)
+                            point.v25 = vce;
+                        else
+                            point.v125 = vce;
+                    }
+                }
+                else if (path.endsWith("conduction.diode_vf"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double vf = map.value("v_typ_V", map.value("v_max_V", 0.0));
+                    if (vf > 0.0)
+                        builder->diode_vf_by_temp[tempBucket(tj)] = vf;
+                }
+                else if (path.endsWith("conduction.diode_vf_at_400A"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double vf = map.value("vf_typ_V", map.value("vf_max_V", 0.0));
+                    if (vf > 0.0)
+                        builder->diode_vf_by_temp[tempBucket(tj)] = vf;
+                }
+                else if (path.endsWith("switching.igbt_eon_mJ"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double e = map.value("e_mJ", 0.0);
+                    if (e > 0.0)
+                        builder->eon_by_temp[tempBucket(tj)] = e;
+                }
+                else if (path.endsWith("switching.igbt_eoff_mJ"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double e = map.value("e_mJ", 0.0);
+                    if (e > 0.0)
+                        builder->eoff_by_temp[tempBucket(tj)] = e;
+                }
+                else if (path.endsWith("switching.diode_recovery.qr_uC"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double qr = map.value("q_uC", 0.0);
+                    if (qr > 0.0)
+                        builder->qr_by_temp[tempBucket(tj)] = qr;
+                }
+                else if (path.endsWith("switching.diode_recovery.irm_A"))
+                {
+                    const double tj = map.value("tj_C", 25.0);
+                    const double irm = map.value("irm_A", 0.0);
+                    if (irm > 0.0)
+                        builder->irm_by_temp[tempBucket(tj)] = irm;
+                }
+            }
+            else if (item.startsWith('['))
+            {
+                const auto values = ParseInlineList(item);
+                if (values.size() >= 2)
+                {
+                    const double current = values[0];
+                    const double val = values[1];
+                    if (path.endsWith("conduction.igbt_vce_on.piecewise_linear_V_at_A"))
+                    {
+                        if (current >= 0.0)
+                        {
+                            builder->noteCurrent(current);
+                            builder->vce_points_raw.append({current, val, val});
+                        }
+                    }
+                    else if (path.endsWith("switching_energy_approx_from_plots.esw_on_mJ_vs_ic_A"))
+                    {
+                        if (current >= 0.0)
+                        {
+                            builder->noteCurrent(current);
+                            builder->eon_points_raw.append({current, val, val});
+                        }
+                    }
+                    else if (path.endsWith("switching_energy_approx_from_plots.esw_off_mJ_vs_ic_A"))
+                    {
+                        if (current >= 0.0)
+                        {
+                            builder->noteCurrent(current);
+                            builder->eoff_points_raw.append({current, val, val});
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        const int colon = trimmed.indexOf(':');
+        if (colon < 0)
+            continue;
+
+        const QString key = trimmed.left(colon).trimmed();
+        const QString value = trimmed.mid(colon + 1).trimmed();
+
+        while (!stack.isEmpty() && indent <= stack.last().indent)
+            stack.removeLast();
+        stack.append({indent, key});
+
+        PresetBuilder* builder = builderForStack(stack);
+        if (!builder)
+            continue;
+
+        const QString path = pathFromStack(stack);
+        if (value.isEmpty())
+            continue;
+
+        bool ok = false;
+        const double num = value.toDouble(&ok);
+        if (!ok)
+            continue;
+
+        if (path.endsWith("limits.min_deadtime_us"))
+        {
+            builder->preset.has_deadtime_us = true;
+            builder->preset.deadtime_us = num;
+        }
+        else if (path.endsWith("switching.reference.vdc_V") ||
+                 path.endsWith("switching_energy_approx_from_plots.reference.vdc_V"))
+        {
+            builder->preset.has_vref_v = true;
+            builder->preset.vref_v = num;
+        }
+        else if (path.endsWith("switching.reference.current_A"))
+        {
+            builder->reference_current_A = num;
+            builder->noteCurrent(num);
+        }
+        else if (path.endsWith("conduction.diode_vf.v_typ_V"))
+        {
+            builder->diode_vf_by_temp[25.0] = num;
+        }
+        else if (path.endsWith("switching.igbt_eon_mJ.typ"))
+        {
+            builder->eon_by_temp[25.0] = num;
+            if (!builder->eon_by_temp.contains(125.0))
+                builder->eon_by_temp[125.0] = num;
+        }
+        else if (path.endsWith("switching.igbt_eoff_mJ.typ"))
+        {
+            builder->eoff_by_temp[25.0] = num;
+            if (!builder->eoff_by_temp.contains(125.0))
+                builder->eoff_by_temp[125.0] = num;
+        }
+        else if (path.endsWith("thermal.rth_jc_K_per_W.igbt_max") ||
+                 path.endsWith("thermal.rth_jc_K_per_W_per_die.igbt") ||
+                 path.endsWith("thermal.rth_jf_K_per_W.igbt"))
+        {
+            builder->preset.has_rth_jc_igbt = true;
+            builder->preset.rth_jc_igbt = num;
+        }
+        else if (path.endsWith("thermal.rth_jc_K_per_W.diode_max") ||
+                 path.endsWith("thermal.rth_jc_K_per_W_per_die.diode") ||
+                 path.endsWith("thermal.rth_jf_K_per_W.diode"))
+        {
+            builder->preset.has_rth_jc_diode = true;
+            builder->preset.rth_jc_diode = num;
+        }
+        else if (path.endsWith("thermal.rth_cs_K_per_W.typ") ||
+                 path.endsWith("thermal.rth_case_to_cooler_K_per_W_module.rth_c_f"))
+        {
+            builder->preset.has_rth_cs = true;
+            builder->preset.rth_cs = num;
+        }
+    }
+
+    for (PresetBuilder& builder : builders)
+    {
+        PowerStagePreset preset = builder.preset;
+
+        if (!preset.has_diode_vf_25 || !preset.has_diode_vf_125)
+        {
+            const double v25 = PickTempValue(builder.diode_vf_by_temp, 25.0, preset.diode_vf_25);
+            const double v125 = PickTempValue(builder.diode_vf_by_temp, 125.0, v25);
+            if (!std::isnan(v25))
+            {
+                preset.has_diode_vf_25 = true;
+                preset.diode_vf_25 = v25;
+            }
+            if (!std::isnan(v125))
+            {
+                preset.has_diode_vf_125 = true;
+                preset.diode_vf_125 = v125;
+            }
+        }
+
+        QVector<sim::CurvePoint> vce_points;
+        if (!builder.vce_by_current.isEmpty())
+        {
+            for (auto it = builder.vce_by_current.begin(); it != builder.vce_by_current.end(); ++it)
+            {
+                double v25 = it.value().v25;
+                double v125 = it.value().v125;
+                if (std::isnan(v25) && !std::isnan(v125))
+                    v25 = v125;
+                if (std::isnan(v125) && !std::isnan(v25))
+                    v125 = v25;
+                if (std::isnan(v25) && std::isnan(v125))
+                    continue;
+                vce_points.append({it.key(), std::isnan(v25) ? 0.0 : v25, std::isnan(v125) ? v25 : v125});
+            }
+        }
+        if (vce_points.isEmpty())
+            vce_points = builder.vce_points_raw;
+        preset.vce_points = vce_points;
+
+        QVector<sim::CurvePoint> eon_points = builder.eon_points_raw;
+        QVector<sim::CurvePoint> eoff_points = builder.eoff_points_raw;
+
+        const double refCurrent = (builder.reference_current_A > 0.0)
+                                      ? builder.reference_current_A
+                                      : (builder.max_current_A > 0.0 ? builder.max_current_A : 100.0);
+
+        if (eon_points.isEmpty() && !builder.eon_by_temp.isEmpty())
+        {
+            const double e25 = PickTempValue(builder.eon_by_temp, 25.0, 0.0);
+            const double e125 = PickTempValue(builder.eon_by_temp, 125.0, e25);
+            eon_points.append({refCurrent, e25, e125});
+        }
+        if (eoff_points.isEmpty() && !builder.eoff_by_temp.isEmpty())
+        {
+            const double e25 = PickTempValue(builder.eoff_by_temp, 25.0, 0.0);
+            const double e125 = PickTempValue(builder.eoff_by_temp, 125.0, e25);
+            eoff_points.append({refCurrent, e25, e125});
+        }
+
+        preset.eon_points = eon_points;
+        preset.eoff_points = eoff_points;
+
+        QVector<sim::CurvePoint> irr_points = builder.irr_points_raw;
+        QVector<sim::CurvePoint> trr_points = builder.trr_points_raw;
+
+        if (irr_points.isEmpty() && !builder.irm_by_temp.isEmpty())
+        {
+            const double irr25 = PickTempValue(builder.irm_by_temp, 25.0, 0.0);
+            const double irr125 = PickTempValue(builder.irm_by_temp, 125.0, irr25);
+            irr_points.append({refCurrent, irr25, irr125});
+        }
+
+        if (trr_points.isEmpty())
+        {
+            if (!builder.trr_by_temp.isEmpty())
+            {
+                const double trr25 = PickTempValue(builder.trr_by_temp, 25.0, 0.0);
+                const double trr125 = PickTempValue(builder.trr_by_temp, 125.0, trr25);
+                trr_points.append({refCurrent, trr25, trr125});
+            }
+            else if (!builder.qr_by_temp.isEmpty() && !builder.irm_by_temp.isEmpty())
+            {
+                const double qr25 = PickTempValue(builder.qr_by_temp, 25.0, 0.0);
+                const double qr125 = PickTempValue(builder.qr_by_temp, 125.0, qr25);
+                const double irm25 = PickTempValue(builder.irm_by_temp, 25.0, 0.0);
+                const double irm125 = PickTempValue(builder.irm_by_temp, 125.0, irm25);
+                const double trr25 = irm25 > 0.0 ? (2.0 * qr25 / irm25) : 0.0;
+                const double trr125 = irm125 > 0.0 ? (2.0 * qr125 / irm125) : trr25;
+                trr_points.append({refCurrent, trr25, trr125});
+            }
+        }
+
+        preset.irr_points = irr_points;
+        preset.trr_points = trr_points;
+
+        const sim::PowerModuleParams defaults = sim::PM300CLA060();
+        if (!preset.has_vref_v)
+        {
+            preset.has_vref_v = true;
+            preset.vref_v = defaults.vref_V;
+        }
+        if (!preset.has_kv)
+        {
+            preset.has_kv = true;
+            preset.kv = defaults.kv;
+        }
+        if (!preset.has_diode_vf_25)
+        {
+            preset.has_diode_vf_25 = true;
+            preset.diode_vf_25 = defaults.diode_vf_25C_V;
+        }
+        if (!preset.has_diode_vf_125)
+        {
+            preset.has_diode_vf_125 = true;
+            preset.diode_vf_125 = defaults.diode_vf_125C_V;
+        }
+        if (!preset.has_rth_jc_igbt)
+        {
+            preset.has_rth_jc_igbt = true;
+            preset.rth_jc_igbt = defaults.rth_jc_igbt_C_per_W;
+        }
+        if (!preset.has_rth_jc_diode)
+        {
+            preset.has_rth_jc_diode = true;
+            preset.rth_jc_diode = defaults.rth_jc_diode_C_per_W;
+        }
+        if (!preset.has_rth_cs)
+        {
+            preset.has_rth_cs = true;
+            preset.rth_cs = defaults.rth_cs_C_per_W;
+        }
+        if (preset.vce_points.isEmpty())
+        {
+            preset.vce_points.reserve(static_cast<int>(defaults.igbt_vce_sat.size()));
+            for (const auto& point : defaults.igbt_vce_sat)
+                preset.vce_points.append(point);
+        }
+        if (preset.eon_points.isEmpty())
+        {
+            preset.eon_points.reserve(static_cast<int>(defaults.eon_mJ.size()));
+            for (const auto& point : defaults.eon_mJ)
+                preset.eon_points.append(point);
+        }
+        if (preset.eoff_points.isEmpty())
+        {
+            preset.eoff_points.reserve(static_cast<int>(defaults.eoff_mJ.size()));
+            for (const auto& point : defaults.eoff_mJ)
+                preset.eoff_points.append(point);
+        }
+        if (preset.irr_points.isEmpty())
+        {
+            preset.irr_points.reserve(static_cast<int>(defaults.irr_A.size()));
+            for (const auto& point : defaults.irr_A)
+                preset.irr_points.append(point);
+        }
+        if (preset.trr_points.isEmpty())
+        {
+            preset.trr_points.reserve(static_cast<int>(defaults.trr_us.size()));
+            for (const auto& point : defaults.trr_us)
+                preset.trr_points.append(point);
+        }
+
+        m_powerStagePresetByKey.insert(preset.key, m_powerStagePresets.size());
+        m_powerStagePresets.append(preset);
+    }
+
+    QSignalBlocker blocker(ui->powerStagePreset);
+    ui->powerStagePreset->setEnabled(true);
+    ui->powerStagePreset->clear();
+    ui->powerStagePreset->addItem("Custom", QString());
+    for (const auto& preset : m_powerStagePresets)
+        ui->powerStagePreset->addItem(preset.label, preset.key);
+
+    const QSettings settings("OpenInverter", "IPMMotorSim");
+    const QString savedKey = settings.value("powerStagePreset").toString();
+    int targetIndex = 0;
+    if (!savedKey.isEmpty())
+    {
+        const auto it = m_powerStagePresetByKey.find(savedKey);
+        if (it != m_powerStagePresetByKey.end())
+            targetIndex = it.value() + 1;
+    }
+    ui->powerStagePreset->setCurrentIndex(targetIndex);
+
+    if (targetIndex > 0)
+    {
+        const PowerStagePreset* preset = findPowerStagePreset(savedKey);
+        if (preset)
+            applyPowerStagePreset(*preset);
+    }
+}
+
+void MainWindow::on_powerStagePreset_currentIndexChanged(int index)
+{
+    Q_UNUSED(index);
+    const QString key = currentPowerStagePresetKey();
+    if (key.isEmpty())
+        return;
+    const PowerStagePreset* preset = findPowerStagePreset(key);
+    if (preset)
+        applyPowerStagePreset(*preset);
+}
+
 void MainWindow::runFor(int num_steps)
 {
     double Va = 0;
@@ -805,6 +1618,7 @@ void MainWindow::runFor(int num_steps)
         default: modMode = sim::ModulationMode::Firmware; break;
     }
     const QString modModeStr = ui->modulationMode->currentText();
+    const QString presetKey = currentPowerStagePresetKey();
     double modBlend = ui->modBlend->text().toDouble();
     modBlend = std::clamp(modBlend, 0.0, 1.0);
 
@@ -889,7 +1703,7 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# deadtime_s=" << invParams.deadtime_s << "\n";
                 logStream << "# sink_temp_c=" << invParams.sink_temp_C << "\n";
                 logStream << "# thermal_tau_s=" << invParams.thermal_tau_s << "\n";
-                logStream << "# inverter_module=PM300CLA060\n";
+                logStream << "# inverter_module=" << (presetKey.isEmpty() ? "custom" : presetKey) << "\n";
                 logStream << "# module_vref_v=" << moduleParams.vref_V << ", kv=" << moduleParams.kv << "\n";
                 logStream << "# module_diode_vf_25c=" << moduleParams.diode_vf_25C_V
                           << ", diode_vf_125c=" << moduleParams.diode_vf_125C_V << "\n";
