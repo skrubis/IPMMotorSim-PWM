@@ -74,6 +74,9 @@
 #define IC 3
 #define IQ 4
 #define ID 5
+#define INV_IA_PP 6
+#define INV_IB_PP 7
+#define INV_IC_PP 8
 
 //Simulation graph
 #define M_RPM 1
@@ -122,6 +125,7 @@
 #define TORQUE 7
 #define ELEC_POWER 8
 #define EFFICIENCY 9
+#define TORQUE_RIPPLE_PP 15
 
 //Loss graph
 #define LOSS_IGBT_COND 10
@@ -604,6 +608,9 @@ MainWindow::MainWindow(QWidget *parent) :
         if(settings.contains(ui->startRpm->objectName())) ui->startRpm->setText(settings.value(ui->startRpm->objectName(),QString()).toString());
         if(settings.contains(ui->modBlend->objectName())) ui->modBlend->setText(settings.value(ui->modBlend->objectName(),QString()).toString());
         if(settings.contains(ui->deadtimeUs->objectName())) ui->deadtimeUs->setText(settings.value(ui->deadtimeUs->objectName(),QString()).toString());
+        if(settings.contains(ui->minOnUs->objectName())) ui->minOnUs->setText(settings.value(ui->minOnUs->objectName(),QString()).toString());
+        if(settings.contains(ui->minOffUs->objectName())) ui->minOffUs->setText(settings.value(ui->minOffUs->objectName(),QString()).toString());
+        if(settings.contains(ui->cb_RippleLoss->objectName())) ui->cb_RippleLoss->setChecked(settings.value(ui->cb_RippleLoss->objectName()).toBool());
         if(settings.contains(ui->sinkTemp->objectName())) ui->sinkTemp->setText(settings.value(ui->sinkTemp->objectName(),QString()).toString());
         if(settings.contains(ui->thermalTau->objectName())) ui->thermalTau->setText(settings.value(ui->thermalTau->objectName(),QString()).toString());
         if(settings.contains(ui->vrefV->objectName())) ui->vrefV->setText(settings.value(ui->vrefV->objectName(),QString()).toString());
@@ -634,6 +641,8 @@ MainWindow::MainWindow(QWidget *parent) :
 
     ui->startRpm->setValidator(new QIntValidator(-20000, 20000, ui->startRpm));
     ui->deadtimeUs->setValidator(new QDoubleValidator(0.0, 50.0, 3, ui->deadtimeUs));
+    ui->minOnUs->setValidator(new QDoubleValidator(0.0, 50.0, 3, ui->minOnUs));
+    ui->minOffUs->setValidator(new QDoubleValidator(0.0, 50.0, 3, ui->minOffUs));
     ui->sinkTemp->setValidator(new QDoubleValidator(-40.0, 200.0, 2, ui->sinkTemp));
     ui->thermalTau->setValidator(new QDoubleValidator(0.01, 100.0, 3, ui->thermalTau));
     ui->vrefV->setValidator(new QDoubleValidator(1.0, 1200.0, 1, ui->vrefV));
@@ -662,25 +671,38 @@ MainWindow::MainWindow(QWidget *parent) :
         w->setToolTipDuration(10000);
     };
 
-    tip(ui->vehicleWeight, "Vehicle mass in kg used in the simple load model.");
-    tip(ui->wheelSize, "Wheel radius in meters. Used to convert torque to force and speed.");
-    tip(ui->gearRatio, "Overall gear ratio from motor to wheel.");
-    tip(ui->Vdc, "DC bus voltage in volts.");
-    tip(ui->Lq, "Quadrature-axis inductance in mH.");
-    tip(ui->Ld, "Direct-axis inductance in mH.");
-    tip(ui->Rs, "Stator phase resistance in ohms.");
-    tip(ui->FluxLinkage, "Flux linkage in mWeber (psi).");
-    tip(ui->SyncDelay, "Electrical sync delay in microseconds (sampling/angle delay).");
-    tip(ui->LoopFreq, "Control loop frequency in Hz.");
-    tip(ui->SamplingPoint, "Current sampling point within the PWM period (percent).");
-    tip(ui->NoiseAmp, "Injected current measurement noise amplitude (A).");
-    tip(ui->RoadGradient, "Road gradient percent. Positive is uphill.");
-    tip(ui->ThrotRamps, "Enable throttle ramping to simulate rate limits.");
-    tip(ui->ExtraCycleDelay, "Adds one PWM cycle delay to voltages.");
-    tip(ui->AddNoise, "Enable noise on current feedback inputs.");
-    tip(ui->runTime, "Duration for Run For (s).");
-    tip(ui->startRpm, "Initial mechanical speed (RPM), applied on Restart.");
+    tip(ui->vehicleWeight, "Vehicle Weight (kg): Used to calculate how quickly the motor can accelerate for a given torque.");
+    tip(ui->wheelSize, "Wheel Radius (m): Rolling radius of the vehicle wheels. Used to calculate acceleration for a given torque.");
+    tip(ui->gearRatio, "Gear Ratio: Total gear ratio (gearbox + diff). Used to calculate acceleration for a given torque.");
+    tip(ui->Vdc, "Vdc (V): HV bus voltage supplying the inverter. Used to convert PWM to effective motor voltage.");
+    tip(ui->Lq, "Lq (mH): Quadrature inductance (rotor at 90 degrees to PM field). Determines current response to applied voltage.");
+    tip(ui->Ld, "Ld (mH): Direct inductance (rotor aligned to PM field). Determines current response to applied voltage.");
+    tip(ui->Rs, "Rs (Ohm): Series resistance of motor windings. Determines voltage drop vs current.");
+    tip(ui->FluxLinkage, "Flux Linkage (mWeber): Affects torque and back-EMF. Also used by the OpenInverter control code.");
+    tip(ui->SyncDelay, "SyncDel (us): Compensation between motor position and current measurement timing in OI. Leave at 16.");
+    tip(ui->LoopFreq, "Loop Frequency (Hz): Frequency of the main OI motor control loop (typically 8800).");
+    tip(ui->SamplingPoint, "Sampling Point (%): OI current sampling point within the PWM period. Leave at 50% for current OI versions.");
+    tip(ui->ExtraCycleDelay, "Extra Cycle Delay: Adds a PWM-cycle delay to represent the OI timer reload. Usually leave enabled.");
+    tip(ui->AddNoise, "Add Noise: Adds artificial noise to current measurements to assess stability vs real-world noise.");
+    tip(ui->NoiseAmp, "Add Noise amplitude (Ap-p): Peak-to-peak noise added to current feedback (A).");
+    tip(ui->RoadGradient, "Road Gradient (%): Positive uphill, negative downhill. Useful to introduce accel/decel during coast/zero-torque cases.");
+    tip(ui->ThrotRamps, "Use Throt Ramps: Limits how quickly throttle changes are applied. Enabled matches typical OI configs; disabled is worst-case transient.");
+
+    tip(ui->runTime, "Numeric field: Time used by Run For (s), Transient, and Accel/Coast.");
+    tip(ui->startRpm, "Start RPM: Initial mechanical speed applied on Restart.");
+    tip(ui->pbRunFor, "Run For (s): Run the simulation for the time set in the numeric field.");
+    tip(ui->pbRunFor10s, "Run (10s): Run the simulation for 10 seconds.");
+    tip(ui->pbRunFor1s, "Run (1s): Run the simulation for 1 second.");
+    tip(ui->pbRunFor100ms, "Run (100ms): Run the simulation for 100 ms.");
+    tip(ui->pbRunFor10ms, "Run (10ms): Run the simulation for 10 ms.");
+    tip(ui->pbStep, "Step: Run the OI control loop once (useful for debugging).");
+    tip(ui->pbTransient, "Transient: Run 0 torque, demand torque, 0 torque, demand torque (each segment uses the numeric field time).");
+    tip(ui->pbAccelCoast, "Accel/Coast: Run demand torque then 0 torque (each segment uses the numeric field time). Useful for field-weakening testing.");
+    tip(ui->pbRestart, "Restart: Reset simulation state and apply Start RPM.");
     tip(ui->deadtimeUs, "PWM deadtime in microseconds applied in the inverter model.");
+    tip(ui->minOnUs, "Minimum high-side ON-time in microseconds (simple pulse-drop clamp).");
+    tip(ui->minOffUs, "Minimum high-side OFF-time in microseconds (simple pulse-clamp-to-100% behavior).");
+    tip(ui->cb_RippleLoss, "Integrate an approximate intra-PWM phase current waveform for loss accounting (simple RL + Vq back-EMF).");
     tip(ui->sinkTemp, "Heatsink/case reference temperature (C) for thermal model.");
     tip(ui->thermalTau, "Thermal time constant (s) for first-order junction tracking.");
     tip(ui->vrefV, "Reference Vdc used for switching-energy curves.");
@@ -696,7 +718,7 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->irrPoints, "Diode reverse recovery current points: I, 25C, 125C (A) per line.");
     tip(ui->trrPoints, "Diode reverse recovery time points: I, 25C, 125C (us) per line.");
     tip(ui->powerStagePreset, "Select a preset from powerstages.yaml to load power-stage parameters.");
-    tip(ui->openInverterPreset, "Select an OpenInverter params JSON preset (from ./params) or choose Default to use firmware defaults.");
+    tip(ui->openInverterPreset, "Params Preset: Load an OpenInverter firmware JSON preset. Only sim-relevant values are applied; syncofs/pinswap/respolepairs are ignored/forced safe.");
     tip(ui->browseOpenInverterPreset, "Browse to an OpenInverter params JSON file to load/apply.");
     tip(ui->torqueDemand, "Torque demand in percent.");
     tip(ui->throttleCurrent, "Current per percent throttle (A/%).");
@@ -704,16 +726,16 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->direction, "Direction: -1 reverse, 0 neutral, 1 forward.");
     tip(ui->IqManual, "Manual q-axis current command (A).");
     tip(ui->IdManual, "Manual d-axis current command (A).");
-    tip(ui->Poles, "Motor pole pairs.");
+    tip(ui->Poles, "Motor Poles: Must match the real motor or torque calculations will be wrong.");
     tip(ui->CurrentKp, "Current controller proportional gain.");
     tip(ui->CurrentKi, "Current controller integral gain.");
     tip(ui->VLimMargin, "Voltage limit margin (firmware units).");
     tip(ui->VLimFlt, "Voltage limit filter (firmware units).");
-    tip(ui->LqMinusLd, "Lq - Ld in mH (for MTPA).");
-    tip(ui->SyncAdv, "Electrical angle advance (dig/Hz).");
-    tip(ui->SyncOfs, "Electrical angle offset (dig).");
+    tip(ui->LqMinusLd, "Lq - Ld (mH): Separate from Vehicle Parameters Lq/Ld. Keep matched for normal use; mismatches can be assessed.");
+    tip(ui->SyncAdv, "SyncAdv (dig/Hz): OI angle advance. Normally leave as set; extreme inductance motors may benefit from small changes.");
+    tip(ui->SyncOfs, "SyncOfs: Ignored/forced to 0 in the simulator for stability.");
     tip(ui->FWCurrMax, "Field weakening current limit (A, typically negative).");
-    tip(ui->FreqMax, "Maximum electrical frequency (Hz).");
+    tip(ui->FreqMax, "FMax (Hz): Higher-level OI vehicle controls are not simulated, so this currently has little/no effect here.");
 
     tip(ui->modulationMode, "Select modulation. Firmware uses stm32-sine PWM. Others use simulator modulator.");
     tip(ui->modBlend, "Blend between SVPWM (0) and clamped DPWM (1).");
@@ -870,7 +892,7 @@ MainWindow::MainWindow(QWidget *parent) :
     m_lastTorqueDemand = 0;
 
     motorGraph->setWindowTitle("Motor Currents");
-    motorGraph->setAxisText("", "Amps (A)", "");
+    motorGraph->setAxisText("", "Amps (A)", "Ripple (A)");
     motorGraph->addSeries("Ia (A)", left, IA);
     motorGraph->addSeries("Ib (A)", left, IB);
     motorGraph->addSeries("Ic (A)", left, IC);
@@ -999,6 +1021,9 @@ MainWindow::MainWindow(QWidget *parent) :
     powerGraph->addSeries("Torque (Nm)", right, TORQUE);
     powerGraph->addSeries("Elec Power (kW)", left, ELEC_POWER);
     powerGraph->addSeries("Efficiency (%)", left, EFFICIENCY);
+    powerGraph->addSeries("Torque ripple pp (Nm)", right, TORQUE_RIPPLE_PP);
+    powerGraph->setOpacity(0.6, TORQUE_RIPPLE_PP);
+    powerGraph->setColour(QColor(160, 0, 200), TORQUE_RIPPLE_PP);
 
     lossGraph->setWindowTitle("Inverter Losses");
     lossGraph->setAxisText("Time (s)", "Loss (kW)", "");
@@ -1085,6 +1110,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->startRpm->objectName(), ui->startRpm->text());
     settings.setValue(ui->modBlend->objectName(), ui->modBlend->text());
     settings.setValue(ui->deadtimeUs->objectName(), ui->deadtimeUs->text());
+    settings.setValue(ui->minOnUs->objectName(), ui->minOnUs->text());
+    settings.setValue(ui->minOffUs->objectName(), ui->minOffUs->text());
+    settings.setValue(ui->cb_RippleLoss->objectName(), ui->cb_RippleLoss->isChecked());
     settings.setValue(ui->sinkTemp->objectName(), ui->sinkTemp->text());
     settings.setValue(ui->thermalTau->objectName(), ui->thermalTau->text());
     settings.setValue(ui->vrefV->objectName(), ui->vrefV->text());
@@ -2476,6 +2504,10 @@ void MainWindow::on_browseOpenInverterPreset_clicked()
 
 void MainWindow::runFor(int num_steps)
 {
+    // Some firmware parameters can destabilize or invalidate the simulator model.
+    // Keep these forced safe for every run (also matches the UI/tooltips).
+    enforceSimulationSafeParams(nullptr);
+
     qInfo().noquote() << QString("runFor: begin steps=%1 dt=%2 time=%3 vdc=%4 pwmfrq_param=%5")
                              .arg(num_steps)
                              .arg(m_timestep, 0, 'g', 9)
@@ -2523,6 +2555,16 @@ void MainWindow::runFor(int num_steps)
         return ok ? val : fallback;
     };
     invParams.deadtime_s = std::max(0.0, readDouble(ui->deadtimeUs, 2.0)) * 1e-6;
+    invParams.min_on_s = std::max(0.0, readDouble(ui->minOnUs, 0.0)) * 1e-6;
+    invParams.min_off_s = std::max(0.0, readDouble(ui->minOffUs, 0.0)) * 1e-6;
+    invParams.integrate_currents_in_pwm = ui->cb_RippleLoss && ui->cb_RippleLoss->isChecked();
+    invParams.phase_R_ohm = std::max(0.0, m_Rs);
+    invParams.phase_L_H = std::max(0.0, 0.5 * (m_Ld + m_Lq));
+    invParams.compute_torque_ripple = invParams.integrate_currents_in_pwm;
+    invParams.pole_pairs = std::max(0.0, m_Poles);
+    invParams.flux_Wb = std::max(0.0, m_fluxLinkage);
+    invParams.ld_H = std::max(0.0, m_Ld);
+    invParams.lq_H = std::max(0.0, m_Lq);
     invParams.sink_temp_C = readDouble(ui->sinkTemp, 25.0);
     invParams.thermal_tau_s = std::max(0.01, readDouble(ui->thermalTau, 1.0));
     sim::PowerModuleParams moduleParams = sim::PM300CLA060();
@@ -2552,7 +2594,21 @@ void MainWindow::runFor(int num_steps)
         return;
     }
 
+    if (invParams.integrate_currents_in_pwm)
+    {
+        motorGraph->addSeries("Ia ripple pp (A)", right, INV_IA_PP);
+        motorGraph->addSeries("Ib ripple pp (A)", right, INV_IB_PP);
+        motorGraph->addSeries("Ic ripple pp (A)", right, INV_IC_PP);
+        motorGraph->setOpacity(0.6, INV_IA_PP);
+        motorGraph->setOpacity(0.6, INV_IB_PP);
+        motorGraph->setOpacity(0.6, INV_IC_PP);
+        motorGraph->setColour(QColor(0, 128, 255), INV_IA_PP);
+        motorGraph->setColour(QColor(0, 200, 0), INV_IB_PP);
+        motorGraph->setColour(QColor(255, 128, 0), INV_IC_PP);
+    }
+
     QList<QPointF> listIa, listIb, listIc, listIq, listId;
+    QList<QPointF> listInvIaPp, listInvIbPp, listInvIcPp;
     QList<QPointF> listMFreq, listMPos, listContMPos;
     QList<QPointF> listCVa, listCVb, listCVc, listCVq, listCVd, listCIq, listCId, listCifw;//, listCivlim;
     QList<QPointF> listVVd, listVVq, listVVq_bemf, listVVq_dueto_id, listVVd_dueto_iq, listVVq_dueto_Rq, listVVd_dueto_Rd, listVVLd, listVVLq;
@@ -2560,6 +2616,7 @@ void MainWindow::runFor(int num_steps)
     QList<QPointF> listPwmT1, listPwmT2, listPwmT0, listPwmSector;
     QList<QPointF> listIdIq;
     QList<QPointF> listPower, listTorque, listElecPower, listEfficiency;
+    QList<QPointF> listTorqueRipplePp;
     QList<QPointF> listLossIgbtCond, listLossDiodeCond, listLossIgbtSw, listLossDiodeRr, listLossTotal;
     double sumLossIgbtCond = 0.0;
     double sumLossDiodeCond = 0.0;
@@ -2600,6 +2657,10 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# pwmfrq_param=" << Param::GetInt(Param::pwmfrq) << " (" << PWMFRQS << ")\n";
                 logStream << "# pwm_freq_hz=" << invParams.pwm_frequency_hz << "\n";
                 logStream << "# deadtime_s=" << invParams.deadtime_s << "\n";
+                logStream << "# min_on_s=" << invParams.min_on_s << "\n";
+                logStream << "# min_off_s=" << invParams.min_off_s << "\n";
+                logStream << "# ripple_loss=" << (invParams.integrate_currents_in_pwm ? "true" : "false")
+                          << " (R=" << invParams.phase_R_ohm << " ohm, L=" << invParams.phase_L_H << " H)\n";
                 logStream << "# sink_temp_c=" << invParams.sink_temp_C << "\n";
                 logStream << "# thermal_tau_s=" << invParams.thermal_tau_s << "\n";
                 logStream << "# inverter_module=" << (presetKey.isEmpty() ? "custom" : presetKey) << "\n";
@@ -2627,7 +2688,9 @@ void MainWindow::runFor(int num_steps)
                           << "theta_e_deg,rpm,torque_nm,power_w,"
                           << "mod_mode,mod_blend,sector,t1,t2,t0,zero_seq,clamp_leg,clamp_pol,"
                           << "inv_igbt_cond_w,inv_diode_cond_w,inv_igbt_sw_w,inv_diode_rr_w,inv_total_w,inv_eff_pct,"
-                          << "tcase_c,tj_igbt_c,tj_diode_c\n";
+                          << "tcase_c,tj_igbt_c,tj_diode_c,"
+                          << "inv_ia_pp,inv_ib_pp,inv_ic_pp,inv_ia_end,inv_ib_end,inv_ic_end,"
+                          << "inv_torque_pp\n";
                 statusBar()->showMessage(QString("Logging to %1").arg(logPath), 5000);
             }
             else
@@ -2700,6 +2763,7 @@ void MainWindow::runFor(int num_steps)
         sim::PhaseVoltages voltages;
         sim::LossBreakdown invLoss{};
         sim::ThermalState invThermal{};
+        sim::PwmRippleDiag invRipple{};
         const sim::PhaseCurrents phaseCurrents{
             motor->getIaSamp(),
             motor->getIbSamp(),
@@ -2726,16 +2790,28 @@ void MainWindow::runFor(int num_steps)
             const double v_alpha = (vd_ctrl * qCos(theta)) - (vq_ctrl * qSin(theta));
             const double v_beta = (vd_ctrl * qSin(theta)) + (vq_ctrl * qCos(theta));
 
+            if (invParams.integrate_currents_in_pwm)
+            {
+                invParams.elec_angle_rad = theta;
+                constexpr double sqrt3 = 1.7320508075688772;
+                const double vq_bemf = motor->getVq_bemf();
+                const double e_alpha = -vq_bemf * qSin(theta);
+                const double e_beta = vq_bemf * qCos(theta);
+                invParams.bemf_phase_ln_V.a = e_alpha;
+                invParams.bemf_phase_ln_V.b = (-0.5 * e_alpha) + ((sqrt3 / 2.0) * e_beta);
+                invParams.bemf_phase_ln_V.c = (-0.5 * e_alpha) - ((sqrt3 / 2.0) * e_beta);
+            }
+
             if(modMode == sim::ModulationMode::Firmware)
             {
                 duty = modulator.GetDutyCycles();
-                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal);
+                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal, &invRipple);
                 modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, sim::ModulationMode::SVPWM, modBlend, &modDiag);
             }
             else
             {
                 duty = modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, modMode, modBlend, &modDiag);
-                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal);
+                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal, &invRipple);
             }
         }
 
@@ -2830,6 +2906,15 @@ void MainWindow::runFor(int num_steps)
             listIb.append(QPointF(m_time, motor->getIbSamp()));
             listIc.append(QPointF(m_time, motor->getIcSamp()));
         }
+        if (invRipple.valid)
+        {
+            const double ia_pp = invRipple.i_max_A[0] - invRipple.i_min_A[0];
+            const double ib_pp = invRipple.i_max_A[1] - invRipple.i_min_A[1];
+            const double ic_pp = invRipple.i_max_A[2] - invRipple.i_min_A[2];
+            listInvIaPp.append(QPointF(m_time, ia_pp));
+            listInvIbPp.append(QPointF(m_time, ib_pp));
+            listInvIcPp.append(QPointF(m_time, ic_pp));
+        }
         listIq.append(QPointF(m_time, motor->getIq()));
         listId.append(QPointF(m_time, motor->getId()));
 
@@ -2884,6 +2969,7 @@ void MainWindow::runFor(int num_steps)
         double inv_eff = 0.0;
         if(elec_power > 1e-6)
             inv_eff = 100.0 * (elec_power / (elec_power + inv_total_W));
+        const double torque_ripple_pp = invRipple.torque_valid ? (invRipple.torque_max_Nm - invRipple.torque_min_Nm) : 0.0;
         const double tj_igbt_avg = (invThermal.igbt_C[0] + invThermal.igbt_C[1] + invThermal.igbt_C[2]) / 3.0;
         const double tj_diode_avg = (invThermal.diode_C[0] + invThermal.diode_C[1] + invThermal.diode_C[2]) / 3.0;
         if(pwmEnabled)
@@ -2909,6 +2995,13 @@ void MainWindow::runFor(int num_steps)
             const double vq_ctrl = controller.UqVolts(m_Vdc);
             const double rpm = motor->getMotorFreq() * 60.0;
             const double zero_seq_log = modDiag.zero_seq;
+            const double ia_pp = invRipple.valid ? (invRipple.i_max_A[0] - invRipple.i_min_A[0]) : 0.0;
+            const double ib_pp = invRipple.valid ? (invRipple.i_max_A[1] - invRipple.i_min_A[1]) : 0.0;
+            const double ic_pp = invRipple.valid ? (invRipple.i_max_A[2] - invRipple.i_min_A[2]) : 0.0;
+            const double ia_end = invRipple.valid ? invRipple.i_end_A[0] : motor->getIaSamp();
+            const double ib_end = invRipple.valid ? invRipple.i_end_A[1] : motor->getIbSamp();
+            const double ic_end = invRipple.valid ? invRipple.i_end_A[2] : motor->getIcSamp();
+            const double torque_pp = invRipple.torque_valid ? (invRipple.torque_max_Nm - invRipple.torque_min_Nm) : 0.0;
             logStream << m_time << "," << i << "," << (pwmEnabled ? 1 : 0) << "," << m_Vdc << ","
                       << duty.a_norm << "," << duty.b_norm << "," << duty.c_norm << ","
                       << Va_cmd << "," << Vb_cmd << "," << Vc_cmd << ","
@@ -2922,7 +3015,9 @@ void MainWindow::runFor(int num_steps)
                       << zero_seq_log << "," << modDiag.clamp_leg << "," << modDiag.clamp_polarity << ","
                       << inv_igbt_cond_W << "," << inv_diode_cond_W << "," << inv_igbt_sw_W << "," << inv_diode_rr_W << ","
                       << inv_total_W << "," << inv_eff << ","
-                      << invThermal.case_C << "," << tj_igbt_avg << "," << tj_diode_avg
+                      << invThermal.case_C << "," << tj_igbt_avg << "," << tj_diode_avg << ","
+                      << ia_pp << "," << ib_pp << "," << ic_pp << "," << ia_end << "," << ib_end << "," << ic_end << ","
+                      << torque_pp
                       << "\n";
         }
 
@@ -2930,6 +3025,7 @@ void MainWindow::runFor(int num_steps)
         {
             listPower.append(QPointF(motor->getMotorFreq()*60, motor->getPower()/1000));
             listTorque.append(QPointF(motor->getMotorFreq()*60, motor->getTorque()));
+            listTorqueRipplePp.append(QPointF(motor->getMotorFreq()*60, torque_ripple_pp));
             listLossIgbtCond.append(QPointF(motor->getMotorFreq()*60, inv_igbt_cond_W/1000));
             listLossDiodeCond.append(QPointF(motor->getMotorFreq()*60, inv_diode_cond_W/1000));
             listLossIgbtSw.append(QPointF(motor->getMotorFreq()*60, inv_igbt_sw_W/1000));
@@ -2945,6 +3041,7 @@ void MainWindow::runFor(int num_steps)
         {
             listPower.append(QPointF(m_time, motor->getPower()/1000));
             listTorque.append(QPointF(m_time, motor->getTorque()));
+            listTorqueRipplePp.append(QPointF(m_time, torque_ripple_pp));
             listLossIgbtCond.append(QPointF(m_time, inv_igbt_cond_W/1000));
             listLossDiodeCond.append(QPointF(m_time, inv_diode_cond_W/1000));
             listLossIgbtSw.append(QPointF(m_time, inv_igbt_sw_W/1000));
@@ -2993,6 +3090,9 @@ void MainWindow::runFor(int num_steps)
     motorGraph->addDataPoints(listIc, IC);
     motorGraph->addDataPoints(listIq, IQ);
     motorGraph->addDataPoints(listId, ID);
+    motorGraph->addDataPoints(listInvIaPp, INV_IA_PP);
+    motorGraph->addDataPoints(listInvIbPp, INV_IB_PP);
+    motorGraph->addDataPoints(listInvIcPp, INV_IC_PP);
 
     simulationGraph->addDataPoints(listMFreq, M_RPM);
     simulationGraph->addDataPoints(listMPos, M_MOTOR_POS);
@@ -3039,6 +3139,7 @@ void MainWindow::runFor(int num_steps)
     powerGraph->addDataPoints(listTorque, TORQUE);
     powerGraph->addDataPoints(listElecPower, ELEC_POWER);
     powerGraph->addDataPoints(listEfficiency, EFFICIENCY);
+    powerGraph->addDataPoints(listTorqueRipplePp, TORQUE_RIPPLE_PP);
     lossGraph->addDataPoints(listLossIgbtCond, LOSS_IGBT_COND);
     lossGraph->addDataPoints(listLossDiodeCond, LOSS_DIODE_COND);
     lossGraph->addDataPoints(listLossIgbtSw, LOSS_IGBT_SW);
@@ -3496,6 +3597,28 @@ void MainWindow::on_deadtimeUs_editingFinished()
     if(val < 0.0)
         val = 0.0;
     ui->deadtimeUs->setText(QString::number(val, 'f', 3));
+}
+
+void MainWindow::on_minOnUs_editingFinished()
+{
+    bool ok = false;
+    double val = ui->minOnUs->text().toDouble(&ok);
+    if(!ok)
+        val = 0.0;
+    if(val < 0.0)
+        val = 0.0;
+    ui->minOnUs->setText(QString::number(val, 'f', 3));
+}
+
+void MainWindow::on_minOffUs_editingFinished()
+{
+    bool ok = false;
+    double val = ui->minOffUs->text().toDouble(&ok);
+    if(!ok)
+        val = 0.0;
+    if(val < 0.0)
+        val = 0.0;
+    ui->minOffUs->setText(QString::number(val, 'f', 3));
 }
 
 void MainWindow::on_sinkTemp_editingFinished()

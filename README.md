@@ -48,21 +48,28 @@ Quick plot helper:
 python tools/plot_quicklook.py <path-to-run.csv>
 ```
 
+If **PWM ripple (loss)** is enabled (Power Stage -> Basics), the CSV includes additional diagnostics:
+- `inv_ia_pp, inv_ib_pp, inv_ic_pp`: peak-to-peak intra-PWM phase current (A) from the ripple approximation.
+- `inv_ia_end, inv_ib_end, inv_ic_end`: end-of-period phase current estimate (A) from the ripple approximation.
+- `inv_torque_pp`: peak-to-peak torque estimate (Nm) from the ripple approximation.
+
 # Implemented Functionality (this fork)
 - SVPWM + DPWM variants (DPWM0/1, DPWMMIN/MAX) with blend control.
 - PWM modulation graph with zero-sequence/clamp/timing/sector visibility toggles.
+- Event-level PWM timeline for inverter loss estimation (per-edge switching/deadtime/commutation accounting).
 - Power stage loss estimation (conduction + switching + diode recovery) with PM300CLA060 placeholder curves.
-- Power stage parameter editor (deadtime, thermal, Vce/Eon/Eoff/Irr/trr curves, etc.).
+- Power stage parameter editor (deadtime, min on/off, thermal, Vce/Eon/Eoff/Irr/trr curves, etc.).
 - Inverter losses window with per-device loss breakdown and averaged summary strip.
-- CSV logging includes modulation diagnostics, losses, and basic thermal estimates.
+- Optional intra-PWM current ripple approximation for loss inputs (simple RL + BEMF), with ripple/torque-ripple diagnostics.
+- CSV logging includes modulation diagnostics, losses, ripple metrics, and basic thermal estimates.
 
 # PWM/Loss Model Shortfalls (current limitations)
-- PWM is still averaged per control timestep; there is no event-based switching timeline yet.
-- Deadtime and conduction paths are modeled per-period, not per-edge; no minimum pulse clamp.
+- Losses now use an event-level PWM timeline (per edge / deadtime window) but phase currents are still held constant over each PWM period.
+- Minimum pulse / timer clamp behavior is still not firmware-accurate (only a basic deadtime-cancels-pulse clamp is applied).
 - Switching loss uses curve interpolation without gate-drive dynamics, Miller effects, or parasitics.
 - Diode recovery is approximated from Irr/trr; no detailed charge waveform or reverse recovery shape.
 - Thermal model is first-order with fixed Rth values; no coupling or Cth from datasheet.
-- Motor plant remains the legacy average model, so phase current ripple is not yet resolved.
+- Motor plant remains the legacy average model, so phase current ripple is not yet resolved (optional intra-PWM RL integration is for loss inputs only).
 
 # Current Limitations
 The simulator uses a number of new parameters not yet found in most builds of stm32-sine.  There is a replacement param_prj.h file in the project directory that will be used in place of the one in the subdirectory.  It is up to the user to ensure that the parameters contained in this replacement file are appropriate for whichever versions of the stn32-sine software is being used.

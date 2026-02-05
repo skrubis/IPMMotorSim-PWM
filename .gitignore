@@ -32,11 +32,11 @@
 *.app
 
 # Build outputs
-/build/
+/build*
 /build-mingw/
 /logs/
 /tasks.md
-
+/tasks2.md
 # Qt Creator/CMake user files
 *.user
 CMakeCache.txt

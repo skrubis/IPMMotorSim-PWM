@@ -215,6 +215,8 @@ private slots:
     void on_modBlendSlider_valueChanged(int value);
     void on_cb_ShowLegends_toggled(bool checked);
     void on_deadtimeUs_editingFinished();
+    void on_minOnUs_editingFinished();
+    void on_minOffUs_editingFinished();
     void on_sinkTemp_editingFinished();
     void on_thermalTau_editingFinished();
 

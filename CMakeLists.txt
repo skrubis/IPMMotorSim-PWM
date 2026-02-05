@@ -40,6 +40,7 @@ add_executable(IPMMotorSim WIN32
   src/sim/controller.cpp
   src/sim/modulator.cpp
   src/sim/inverter_switching_model.cpp
+  src/sim/pwm_timeline.cpp
   src/sim/power_module.cpp
   IPMMotorSim/mainwindow.ui
   IPMMotorSim/stm32-sine/libopeninv/src/params.cpp
