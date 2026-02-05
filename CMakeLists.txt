@@ -33,6 +33,7 @@ add_executable(IPMMotorSim WIN32
   IPMMotorSim/datagraph.cpp
   IPMMotorSim/motormodel.cpp
   IPMMotorSim/idiqgraph.cpp
+  IPMMotorSim/app_logging.cpp
   IPMMotorSim/terminal_stubs.cpp
   IPMMotorSim/cpp_teststubs.cpp
   IPMMotorSim/teststubs.c
@@ -73,3 +74,12 @@ if(MSVC)
 endif()
 
 target_link_libraries(IPMMotorSim PRIVATE ${QT_LIBS})
+
+# Ship power-stage presets next to the executable so the UI preset dropdown works
+# when running from the build output directory (and when packaging the build folder).
+add_custom_command(TARGET IPMMotorSim POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/powerstages.yaml
+          $<TARGET_FILE_DIR:IPMMotorSim>/powerstages.yaml
+  VERBATIM
+)

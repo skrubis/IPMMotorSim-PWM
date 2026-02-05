@@ -49,6 +49,7 @@
 #include "pwmgeneration.h"
 #include "foc.h"
 #include "params.h"
+#include "app_logging.h"
 #include "inc_encoder.h"
 #include "teststubs.h"
 #include "my_math.h"
@@ -134,7 +135,7 @@ extern volatile double g_il1_input;
 extern volatile double g_il2_input;
 
 // C test stubs globals
-extern volatile bool disablePWM;
+extern "C" volatile bool disablePWM;
 
 static double PwmFrequencyHzFromParam(int pwmfrq)
 {
@@ -410,6 +411,47 @@ static QString FormatCurvePointsText(const QVector<sim::CurvePoint>& raw, int co
     }
     return lines.join('\n');
 }
+
+class ScopedSignalBlockerAll
+{
+public:
+    explicit ScopedSignalBlockerAll(QObject* root)
+    {
+        add(root);
+        const auto children = root ? root->findChildren<QObject*>(QString(), Qt::FindChildrenRecursively) : QList<QObject*>{};
+        for (QObject* child : children)
+            add(child);
+    }
+
+    ~ScopedSignalBlockerAll()
+    {
+        for (const auto& entry : m_prevState)
+        {
+            if (entry.object)
+                entry.object->blockSignals(entry.prevBlocked);
+        }
+    }
+
+    ScopedSignalBlockerAll(const ScopedSignalBlockerAll&) = delete;
+    ScopedSignalBlockerAll& operator=(const ScopedSignalBlockerAll&) = delete;
+
+private:
+    struct Entry
+    {
+        QObject* object{};
+        bool prevBlocked{};
+    };
+
+    void add(QObject* object)
+    {
+        if (!object)
+            return;
+        m_prevState.push_back({object, object->signalsBlocked()});
+        object->blockSignals(true);
+    }
+
+    QVector<Entry> m_prevState;
+};
 } // namespace
 
 
@@ -421,6 +463,11 @@ MainWindow::MainWindow(QWidget *parent) :
     setAttribute(Qt::WA_AlwaysShowToolTips, true);
 
     QSettings settings("OpenInverter", "IPMMotorSim");
+    qInfo().noquote() << QString("QSettings: cb_LogCsv contains=%1 value='%2' throttleCurrent contains=%3 value='%4'")
+                             .arg(settings.contains("cb_LogCsv") ? "true" : "false")
+                             .arg(settings.value("cb_LogCsv").toString())
+                             .arg(settings.contains("throttleCurrent") ? "true" : "false")
+                             .arg(settings.value("throttleCurrent").toString());
     const bool okGeo = restoreGeometry(settings.value("mainwin/geometry").toByteArray());
     const bool okState = restoreState(settings.value("mainwin/windowState").toByteArray());
     if(!okGeo || !okState)
@@ -440,49 +487,53 @@ MainWindow::MainWindow(QWidget *parent) :
         }
     }
 
-    if(settings.contains(ui->vehicleWeight->objectName())) ui->vehicleWeight->setText(settings.value(ui->vehicleWeight->objectName(),QString()).toString());
-    if(settings.contains(ui->wheelSize->objectName())) ui->wheelSize->setText(settings.value(ui->wheelSize->objectName(),QString()).toString());
-    if(settings.contains(ui->gearRatio->objectName())) ui->gearRatio->setText(settings.value(ui->gearRatio->objectName(),QString()).toString());
-    if(settings.contains(ui->Vdc->objectName())) ui->Vdc->setText(settings.value(ui->Vdc->objectName(),QString()).toString());
-    if(settings.contains(ui->Lq->objectName())) ui->Lq->setText(settings.value(ui->Lq->objectName(),QString()).toString());
-    if(settings.contains(ui->Ld->objectName())) ui->Ld->setText(settings.value(ui->Ld->objectName(),QString()).toString());
-    if(settings.contains(ui->Rs->objectName())) ui->Rs->setText(settings.value(ui->Rs->objectName(),QString()).toString());
-    if(settings.contains(ui->SyncDelay->objectName())) ui->SyncDelay->setText(settings.value(ui->SyncDelay->objectName(),QString()).toString());
-    if(settings.contains(ui->LoopFreq->objectName())) ui->LoopFreq->setText(settings.value(ui->LoopFreq->objectName(),QString()).toString());
-    if(settings.contains(ui->SamplingPoint->objectName())) ui->SamplingPoint->setText(settings.value(ui->SamplingPoint->objectName(),QString()).toString());
-    if(settings.contains(ui->ExtraCycleDelay->objectName())) ui->ExtraCycleDelay->setChecked(settings.value(ui->ExtraCycleDelay->objectName()).toBool());
-    if(settings.contains(ui->AddNoise->objectName())) ui->AddNoise->setChecked(settings.value(ui->AddNoise->objectName()).toBool());
-    if(settings.contains(ui->NoiseAmp->objectName())) ui->NoiseAmp->setText(settings.value(ui->NoiseAmp->objectName(),QString()).toString());
-    if(settings.contains(ui->runTime->objectName())) ui->runTime->setText(settings.value(ui->runTime->objectName(),QString()).toString());
-    if(settings.contains(ui->startRpm->objectName())) ui->startRpm->setText(settings.value(ui->startRpm->objectName(),QString()).toString());
-    if(settings.contains(ui->modBlend->objectName())) ui->modBlend->setText(settings.value(ui->modBlend->objectName(),QString()).toString());
-    if(settings.contains(ui->deadtimeUs->objectName())) ui->deadtimeUs->setText(settings.value(ui->deadtimeUs->objectName(),QString()).toString());
-    if(settings.contains(ui->sinkTemp->objectName())) ui->sinkTemp->setText(settings.value(ui->sinkTemp->objectName(),QString()).toString());
-    if(settings.contains(ui->thermalTau->objectName())) ui->thermalTau->setText(settings.value(ui->thermalTau->objectName(),QString()).toString());
-    if(settings.contains(ui->vrefV->objectName())) ui->vrefV->setText(settings.value(ui->vrefV->objectName(),QString()).toString());
-    if(settings.contains(ui->kvExp->objectName())) ui->kvExp->setText(settings.value(ui->kvExp->objectName(),QString()).toString());
-    if(settings.contains(ui->diodeVf25->objectName())) ui->diodeVf25->setText(settings.value(ui->diodeVf25->objectName(),QString()).toString());
-    if(settings.contains(ui->diodeVf125->objectName())) ui->diodeVf125->setText(settings.value(ui->diodeVf125->objectName(),QString()).toString());
-    if(settings.contains(ui->rthJcIgbt->objectName())) ui->rthJcIgbt->setText(settings.value(ui->rthJcIgbt->objectName(),QString()).toString());
-    if(settings.contains(ui->rthJcDiode->objectName())) ui->rthJcDiode->setText(settings.value(ui->rthJcDiode->objectName(),QString()).toString());
-    if(settings.contains(ui->rthCs->objectName())) ui->rthCs->setText(settings.value(ui->rthCs->objectName(),QString()).toString());
-    if(settings.contains(ui->vcePoints->objectName())) ui->vcePoints->setPlainText(settings.value(ui->vcePoints->objectName(),QString()).toString());
-    if(settings.contains(ui->eonPoints->objectName())) ui->eonPoints->setPlainText(settings.value(ui->eonPoints->objectName(),QString()).toString());
-    if(settings.contains(ui->eoffPoints->objectName())) ui->eoffPoints->setPlainText(settings.value(ui->eoffPoints->objectName(),QString()).toString());
-    if(settings.contains(ui->irrPoints->objectName())) ui->irrPoints->setPlainText(settings.value(ui->irrPoints->objectName(),QString()).toString());
-    if(settings.contains(ui->trrPoints->objectName())) ui->trrPoints->setPlainText(settings.value(ui->trrPoints->objectName(),QString()).toString());
-    if(settings.contains(ui->RoadGradient->objectName())) ui->RoadGradient->setText(settings.value(ui->RoadGradient->objectName(),QString()).toString());
-    if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
-    if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
-    if(settings.contains(ui->cb_LogCsv->objectName())) ui->cb_LogCsv->setChecked(settings.value(ui->cb_LogCsv->objectName()).toBool());
-    if(settings.contains(ui->cb_PwmZeroSeq->objectName())) ui->cb_PwmZeroSeq->setChecked(settings.value(ui->cb_PwmZeroSeq->objectName()).toBool());
-    if(settings.contains(ui->cb_PwmClamp->objectName())) ui->cb_PwmClamp->setChecked(settings.value(ui->cb_PwmClamp->objectName()).toBool());
-    if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
-    if(settings.contains(ui->cb_PwmSector->objectName())) ui->cb_PwmSector->setChecked(settings.value(ui->cb_PwmSector->objectName()).toBool());
-    if(settings.contains(ui->cb_ShowLegends->objectName())) ui->cb_ShowLegends->setChecked(settings.value(ui->cb_ShowLegends->objectName()).toBool());
-    if(settings.contains(ui->cb_Losses->objectName())) ui->cb_Losses->setChecked(settings.value(ui->cb_Losses->objectName()).toBool());
-    if(settings.contains(ui->modulationMode->objectName()))
-        ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
+    {
+        ScopedSignalBlockerAll blockSignals(this);
+
+        if(settings.contains(ui->vehicleWeight->objectName())) ui->vehicleWeight->setText(settings.value(ui->vehicleWeight->objectName(),QString()).toString());
+        if(settings.contains(ui->wheelSize->objectName())) ui->wheelSize->setText(settings.value(ui->wheelSize->objectName(),QString()).toString());
+        if(settings.contains(ui->gearRatio->objectName())) ui->gearRatio->setText(settings.value(ui->gearRatio->objectName(),QString()).toString());
+        if(settings.contains(ui->Vdc->objectName())) ui->Vdc->setText(settings.value(ui->Vdc->objectName(),QString()).toString());
+        if(settings.contains(ui->Lq->objectName())) ui->Lq->setText(settings.value(ui->Lq->objectName(),QString()).toString());
+        if(settings.contains(ui->Ld->objectName())) ui->Ld->setText(settings.value(ui->Ld->objectName(),QString()).toString());
+        if(settings.contains(ui->Rs->objectName())) ui->Rs->setText(settings.value(ui->Rs->objectName(),QString()).toString());
+        if(settings.contains(ui->SyncDelay->objectName())) ui->SyncDelay->setText(settings.value(ui->SyncDelay->objectName(),QString()).toString());
+        if(settings.contains(ui->LoopFreq->objectName())) ui->LoopFreq->setText(settings.value(ui->LoopFreq->objectName(),QString()).toString());
+        if(settings.contains(ui->SamplingPoint->objectName())) ui->SamplingPoint->setText(settings.value(ui->SamplingPoint->objectName(),QString()).toString());
+        if(settings.contains(ui->ExtraCycleDelay->objectName())) ui->ExtraCycleDelay->setChecked(settings.value(ui->ExtraCycleDelay->objectName()).toBool());
+        if(settings.contains(ui->AddNoise->objectName())) ui->AddNoise->setChecked(settings.value(ui->AddNoise->objectName()).toBool());
+        if(settings.contains(ui->NoiseAmp->objectName())) ui->NoiseAmp->setText(settings.value(ui->NoiseAmp->objectName(),QString()).toString());
+        if(settings.contains(ui->runTime->objectName())) ui->runTime->setText(settings.value(ui->runTime->objectName(),QString()).toString());
+        if(settings.contains(ui->startRpm->objectName())) ui->startRpm->setText(settings.value(ui->startRpm->objectName(),QString()).toString());
+        if(settings.contains(ui->modBlend->objectName())) ui->modBlend->setText(settings.value(ui->modBlend->objectName(),QString()).toString());
+        if(settings.contains(ui->deadtimeUs->objectName())) ui->deadtimeUs->setText(settings.value(ui->deadtimeUs->objectName(),QString()).toString());
+        if(settings.contains(ui->sinkTemp->objectName())) ui->sinkTemp->setText(settings.value(ui->sinkTemp->objectName(),QString()).toString());
+        if(settings.contains(ui->thermalTau->objectName())) ui->thermalTau->setText(settings.value(ui->thermalTau->objectName(),QString()).toString());
+        if(settings.contains(ui->vrefV->objectName())) ui->vrefV->setText(settings.value(ui->vrefV->objectName(),QString()).toString());
+        if(settings.contains(ui->kvExp->objectName())) ui->kvExp->setText(settings.value(ui->kvExp->objectName(),QString()).toString());
+        if(settings.contains(ui->diodeVf25->objectName())) ui->diodeVf25->setText(settings.value(ui->diodeVf25->objectName(),QString()).toString());
+        if(settings.contains(ui->diodeVf125->objectName())) ui->diodeVf125->setText(settings.value(ui->diodeVf125->objectName(),QString()).toString());
+        if(settings.contains(ui->rthJcIgbt->objectName())) ui->rthJcIgbt->setText(settings.value(ui->rthJcIgbt->objectName(),QString()).toString());
+        if(settings.contains(ui->rthJcDiode->objectName())) ui->rthJcDiode->setText(settings.value(ui->rthJcDiode->objectName(),QString()).toString());
+        if(settings.contains(ui->rthCs->objectName())) ui->rthCs->setText(settings.value(ui->rthCs->objectName(),QString()).toString());
+        if(settings.contains(ui->vcePoints->objectName())) ui->vcePoints->setPlainText(settings.value(ui->vcePoints->objectName(),QString()).toString());
+        if(settings.contains(ui->eonPoints->objectName())) ui->eonPoints->setPlainText(settings.value(ui->eonPoints->objectName(),QString()).toString());
+        if(settings.contains(ui->eoffPoints->objectName())) ui->eoffPoints->setPlainText(settings.value(ui->eoffPoints->objectName(),QString()).toString());
+        if(settings.contains(ui->irrPoints->objectName())) ui->irrPoints->setPlainText(settings.value(ui->irrPoints->objectName(),QString()).toString());
+        if(settings.contains(ui->trrPoints->objectName())) ui->trrPoints->setPlainText(settings.value(ui->trrPoints->objectName(),QString()).toString());
+        if(settings.contains(ui->RoadGradient->objectName())) ui->RoadGradient->setText(settings.value(ui->RoadGradient->objectName(),QString()).toString());
+        if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
+        if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
+        if(settings.contains(ui->cb_LogCsv->objectName())) ui->cb_LogCsv->setChecked(settings.value(ui->cb_LogCsv->objectName()).toBool());
+        if(settings.contains(ui->cb_PwmZeroSeq->objectName())) ui->cb_PwmZeroSeq->setChecked(settings.value(ui->cb_PwmZeroSeq->objectName()).toBool());
+        if(settings.contains(ui->cb_PwmClamp->objectName())) ui->cb_PwmClamp->setChecked(settings.value(ui->cb_PwmClamp->objectName()).toBool());
+        if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
+        if(settings.contains(ui->cb_PwmSector->objectName())) ui->cb_PwmSector->setChecked(settings.value(ui->cb_PwmSector->objectName()).toBool());
+        if(settings.contains(ui->cb_ShowLegends->objectName())) ui->cb_ShowLegends->setChecked(settings.value(ui->cb_ShowLegends->objectName()).toBool());
+        if(settings.contains(ui->cb_Losses->objectName())) ui->cb_Losses->setChecked(settings.value(ui->cb_Losses->objectName()).toBool());
+        if(settings.contains(ui->modulationMode->objectName()))
+            ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
+    }
 
     ui->startRpm->setValidator(new QIntValidator(-20000, 20000, ui->startRpm));
     ui->deadtimeUs->setValidator(new QDoubleValidator(0.0, 50.0, 3, ui->deadtimeUs));
@@ -647,20 +698,21 @@ MainWindow::MainWindow(QWidget *parent) :
     Param::SetInt(Param::pinswap,0); //shouldn't be a problem but may be in the future
     Param::SetInt(Param::respolepairs,Param::GetInt(Param::polepairs)); //force resolver pole pairs to match motor
 
-    ui->LqMinusLd->setText(QString::number(Param::GetFloat(Param::lqminusld), 'f', 1));
-    ui->FluxLinkage->setText(QString::number(Param::GetInt(Param::fluxlinkage)));
-    ui->SyncAdv->setText(QString::number(Param::GetInt(Param::syncadv)));
-    ui->FreqMax->setText(QString::number(Param::GetFloat(Param::fmax), 'f', 1));
-    ui->Poles->setText(QString::number(Param::GetFloat(Param::polepairs), 'f', 1));
-    ui->CurrentKp->setText(QString::number(Param::GetInt(Param::iqkp)));
-    ui->CurrentKi->setText(QString::number(Param::GetInt(Param::curki)));
-    ui->VLimMargin->setText(QString::number(Param::GetInt(Param::vlimmargin)));
-    ui->VLimFlt->setText(QString::number(Param::GetInt(Param::vlimflt)));
-    ui->FWCurrMax->setText(QString::number(Param::GetInt(Param::fwcurmax)));
-    ui->IdManual->setText(QString::number(Param::GetFloat(Param::manualid), 'f', 1));
-    ui->IqManual->setText(QString::number(Param::GetFloat(Param::manualiq), 'f', 1));
-    ui->SyncAdv->setText(QString::number(Param::GetInt(Param::syncadv)));
-    ui->throttleCurrent->setText(QString::number(Param::GetFloat(Param::throtcur), 'f', 1));
+    // Only populate "openinverter params" UI fields from Param defaults when there's no saved UI setting.
+    // Otherwise, we'd overwrite persisted settings and run the sim with unexpected defaults.
+    if(!settings.contains(ui->LqMinusLd->objectName())) ui->LqMinusLd->setText(QString::number(Param::GetFloat(Param::lqminusld), 'f', 1));
+    if(!settings.contains(ui->FluxLinkage->objectName())) ui->FluxLinkage->setText(QString::number(Param::GetInt(Param::fluxlinkage)));
+    if(!settings.contains(ui->SyncAdv->objectName())) ui->SyncAdv->setText(QString::number(Param::GetInt(Param::syncadv)));
+    if(!settings.contains(ui->FreqMax->objectName())) ui->FreqMax->setText(QString::number(Param::GetFloat(Param::fmax), 'f', 1));
+    if(!settings.contains(ui->Poles->objectName())) ui->Poles->setText(QString::number(Param::GetFloat(Param::polepairs), 'f', 1));
+    if(!settings.contains(ui->CurrentKp->objectName())) ui->CurrentKp->setText(QString::number(Param::GetInt(Param::iqkp)));
+    if(!settings.contains(ui->CurrentKi->objectName())) ui->CurrentKi->setText(QString::number(Param::GetInt(Param::curki)));
+    if(!settings.contains(ui->VLimMargin->objectName())) ui->VLimMargin->setText(QString::number(Param::GetInt(Param::vlimmargin)));
+    if(!settings.contains(ui->VLimFlt->objectName())) ui->VLimFlt->setText(QString::number(Param::GetInt(Param::vlimflt)));
+    if(!settings.contains(ui->FWCurrMax->objectName())) ui->FWCurrMax->setText(QString::number(Param::GetInt(Param::fwcurmax)));
+    if(!settings.contains(ui->IdManual->objectName())) ui->IdManual->setText(QString::number(Param::GetFloat(Param::manualid), 'f', 1));
+    if(!settings.contains(ui->IqManual->objectName())) ui->IqManual->setText(QString::number(Param::GetFloat(Param::manualiq), 'f', 1));
+    if(!settings.contains(ui->throttleCurrent->objectName())) ui->throttleCurrent->setText(QString::number(Param::GetFloat(Param::throtcur), 'f', 1));
 
     m_wheelSize = ui->wheelSize->text().toDouble();
     m_vehicleWeight = ui->vehicleWeight->text().toDouble();
@@ -680,6 +732,25 @@ MainWindow::MainWindow(QWidget *parent) :
     Param::SetFloat(Param::udc, m_Vdc);
 
     motor = new sim::MotorPlant(m_wheelSize,m_gearRatio,m_roadGradient,m_vehicleWeight,m_Lq,m_Ld,m_Rs,m_Poles,m_fluxLinkage,m_timestep,m_syncdelay,m_samplingPoint);
+
+    // Ensure Param state reflects the UI (including restored settings) even if the user hasn't focused/edited fields.
+    // Without this, persisted UI values like throttle current can be displayed but not actually applied to the controller.
+    on_Poles_editingFinished();
+    on_FluxLinkage_editingFinished();
+    on_LqMinusLd_editingFinished();
+    on_SyncAdv_editingFinished();
+    on_FreqMax_editingFinished();
+    on_CurrentKp_editingFinished();
+    on_CurrentKi_editingFinished();
+    on_VLimMargin_editingFinished();
+    on_VLimFlt_editingFinished();
+    on_FWCurrMax_editingFinished();
+    on_IdManual_editingFinished();
+    on_IqManual_editingFinished();
+    on_direction_editingFinished();
+    on_opMode_editingFinished();
+    on_throttleCurrent_editingFinished();
+    on_torqueDemand_editingFinished();
 
     m_time = 0;
     m_old_time = 0;
@@ -1109,6 +1180,7 @@ void MainWindow::loadPowerStagePresets()
         ui->powerStagePreset->clear();
         ui->powerStagePreset->addItem("Missing powerstages.yaml", QString());
         ui->powerStagePreset->setEnabled(false);
+        qWarning().noquote() << "powerstages.yaml not found (preset dropdown disabled)";
         return;
     }
 
@@ -1119,6 +1191,368 @@ void MainWindow::loadPowerStagePresets()
         ui->powerStagePreset->clear();
         ui->powerStagePreset->addItem("Unable to read powerstages.yaml", QString());
         ui->powerStagePreset->setEnabled(false);
+        qWarning().noquote() << QString("Unable to read powerstages.yaml at '%1'").arg(yamlPath);
+        return;
+    }
+
+    const QString yamlContent = QString::fromUtf8(file.readAll());
+
+    // New schema (schema_version: 1, power_stages: - id / display_name ...)
+    if (yamlContent.contains("power_stages:"))
+    {
+        struct CurveBuckets
+        {
+            QMap<double, QMap<double, double>> vce_by_current;
+            QMap<double, QMap<double, double>> eon_by_current;
+            QMap<double, QMap<double, double>> eoff_by_current;
+            QMap<double, QMap<double, double>> irr_by_current;
+            QMap<double, QMap<double, double>> trr_by_current;
+        };
+
+        struct StageBuilderV1
+        {
+            PowerStagePreset preset;
+            CurveBuckets curves;
+
+            double diode_vf_current_A = 0.0;
+            QMap<double, double> diode_vf_by_temp;
+
+            double vref_V = 0.0;
+            double kv = std::numeric_limits<double>::quiet_NaN();
+        };
+
+        auto unquote = [](QString text)
+        {
+            text = text.trimmed();
+            if (text.size() >= 2)
+            {
+                const QChar first = text.front();
+                const QChar last = text.back();
+                if ((first == '"' && last == '"') || (first == '\'' && last == '\''))
+                    return text.mid(1, text.size() - 2);
+            }
+            return text;
+        };
+
+        auto tempBucket = [](double tj_C)
+        {
+            return (tj_C >= 100.0) ? 125.0 : 25.0;
+        };
+
+        auto pickTemp = [](const QMap<double, double>& values, double target, double fallback)
+        {
+            return PickTempValue(values, target, fallback);
+        };
+
+        auto addPoint3 = [&](QMap<double, QMap<double, double>>& bucket,
+                             double current_A, double tj_C, double value)
+        {
+            if (current_A < 0.0)
+                return;
+            const double temp = tempBucket(tj_C);
+            bucket[current_A][temp] = value;
+        };
+
+        const QStringList lines = yamlContent.split('\n');
+        QVector<YamlFrame> stack;
+        bool inPowerStages = false;
+        StageBuilderV1 current;
+        bool haveStage = false;
+        double globalKv = std::numeric_limits<double>::quiet_NaN();
+
+        auto finalizeStage = [&]()
+        {
+            if (!haveStage || current.preset.key.trimmed().isEmpty())
+                return;
+
+            // Apply scalar fields
+            if (current.vref_V > 0.0)
+            {
+                current.preset.has_vref_v = true;
+                current.preset.vref_v = current.vref_V;
+            }
+            const double kv = std::isfinite(current.kv) ? current.kv : (std::isfinite(globalKv) ? globalKv : std::numeric_limits<double>::quiet_NaN());
+            if (std::isfinite(kv))
+            {
+                current.preset.has_kv = true;
+                current.preset.kv = kv;
+            }
+
+            if (!current.diode_vf_by_temp.isEmpty())
+            {
+                current.preset.has_diode_vf_25 = true;
+                current.preset.diode_vf_25 = pickTemp(current.diode_vf_by_temp, 25.0, 0.0);
+                current.preset.has_diode_vf_125 = true;
+                current.preset.diode_vf_125 = pickTemp(current.diode_vf_by_temp, 125.0, current.preset.diode_vf_25);
+            }
+
+            auto buildCurve = [&](const QMap<double, QMap<double, double>>& byCurrent)
+            {
+                QVector<sim::CurvePoint> out;
+                out.reserve(byCurrent.size());
+                for (auto it = byCurrent.begin(); it != byCurrent.end(); ++it)
+                {
+                    const double current_A = it.key();
+                    const QMap<double, double>& temps = it.value();
+                    sim::CurvePoint point;
+                    point.current_A = current_A;
+                    point.val_25C = pickTemp(temps, 25.0, std::numeric_limits<double>::quiet_NaN());
+                    point.val_125C = pickTemp(temps, 125.0, point.val_25C);
+                    out.append(point);
+                }
+                return NormalizeCurvePoints(out);
+            };
+
+            current.preset.vce_points = buildCurve(current.curves.vce_by_current);
+            current.preset.eon_points = buildCurve(current.curves.eon_by_current);
+            current.preset.eoff_points = buildCurve(current.curves.eoff_by_current);
+            current.preset.irr_points = buildCurve(current.curves.irr_by_current);
+            current.preset.trr_points = buildCurve(current.curves.trr_by_current);
+
+            if (current.preset.label.trimmed().isEmpty())
+                current.preset.label = current.preset.key;
+
+            m_powerStagePresetByKey.insert(current.preset.key, m_powerStagePresets.size());
+            m_powerStagePresets.append(current.preset);
+        };
+
+        auto pathFromStack = [](const QVector<YamlFrame>& stack)
+        {
+            QStringList parts;
+            parts.reserve(stack.size());
+            for (const auto& frame : stack)
+                parts.append(frame.key);
+            return parts.join('.');
+        };
+
+        for (const QString& rawLine : lines)
+        {
+            const QString stripped = StripComments(rawLine);
+            if (stripped.trimmed().isEmpty())
+                continue;
+
+            const int indent = LeadingSpaces(stripped);
+            const QString trimmed = stripped.trimmed();
+
+            // List items (including stage headers and point arrays)
+            if (trimmed.startsWith('-'))
+            {
+                const QString item = trimmed.mid(1).trimmed();
+
+                if (inPowerStages && indent == 2 && item.startsWith("id:"))
+                {
+                    finalizeStage();
+                    current = StageBuilderV1{};
+                    haveStage = true;
+
+                    const QString idValue = unquote(item.mid(item.indexOf(':') + 1).trimmed());
+                    current.preset.key = idValue;
+                    current.preset.label = idValue;
+
+                    stack.clear();
+                    stack.append({0, "power_stages"});
+                    continue;
+                }
+
+                if (!haveStage)
+                    continue;
+
+                if (item.startsWith('['))
+                {
+                    const auto values = ParseInlineList(item);
+                    const QString path = pathFromStack(stack);
+
+                    if (path.endsWith("device.conduction.igbt_vce_sat_points_V") && values.size() >= 3)
+                    {
+                        addPoint3(current.curves.vce_by_current, values[0], values[1], values[2]);
+                    }
+                    else if (path.endsWith("device.conduction.diode_vf_points_V") && values.size() >= 3)
+                    {
+                        const double current_A = values[0];
+                        const double tj = values[1];
+                        const double vf = values[2];
+                        if (vf > 0.0 && current_A >= current.diode_vf_current_A)
+                        {
+                            current.diode_vf_current_A = current_A;
+                            current.diode_vf_by_temp[tempBucket(tj)] = vf;
+                        }
+                    }
+                    else if (path.endsWith("device.switching.igbt_eon_points_mJ") && values.size() >= 3)
+                    {
+                        addPoint3(current.curves.eon_by_current, values[0], values[1], values[2]);
+                    }
+                    else if (path.endsWith("device.switching.igbt_eoff_points_mJ") && values.size() >= 3)
+                    {
+                        addPoint3(current.curves.eoff_by_current, values[0], values[1], values[2]);
+                    }
+                    else if (path.endsWith("device.switching.diode_reverse_recovery.irr_points_A") && values.size() >= 3)
+                    {
+                        addPoint3(current.curves.irr_by_current, values[0], values[1], values[2]);
+                    }
+                    else if (path.endsWith("device.switching.diode_reverse_recovery.trr_points_us") && values.size() >= 3)
+                    {
+                        addPoint3(current.curves.trr_by_current, values[0], values[1], values[2]);
+                    }
+                    else if (path.endsWith("device.switching.igbt_eon_curve_mJ_vs_Ic_A") && values.size() >= 2)
+                    {
+                        // Curves without temperature: assume high-temp bucket
+                        addPoint3(current.curves.eon_by_current, values[0], 125.0, values[1]);
+                    }
+                    else if (path.endsWith("device.switching.igbt_eoff_curve_mJ_vs_Ic_A") && values.size() >= 2)
+                    {
+                        addPoint3(current.curves.eoff_by_current, values[0], 125.0, values[1]);
+                    }
+                    else if (path.endsWith("device.switching.diode_erec_points_mJ") && values.size() >= 3)
+                    {
+                        // Convert Erec (mJ) to an equivalent (Irr, trr) pair using Qrr ~= E/V and Qrr ~= 0.5*Irr*trr.
+                        // This is an approximation, but it lets the existing Err model consume diode recovery energy.
+                        const double current_A = values[0];
+                        const double tj = values[1];
+                        const double erec_mJ = values[2];
+                        if (erec_mJ > 0.0 && current.vref_V > 0.0)
+                        {
+                            const double qrr_C = (erec_mJ * 1e-3) / current.vref_V;
+                            const double trr_s = 0.2e-6; // default if only Erec is provided
+                            const double irr_A = (trr_s > 0.0) ? (2.0 * qrr_C / trr_s) : 0.0;
+                            addPoint3(current.curves.trr_by_current, current_A, tj, trr_s * 1e6);
+                            addPoint3(current.curves.irr_by_current, current_A, tj, irr_A);
+                        }
+                    }
+                }
+
+                continue;
+            }
+
+            const int colon = trimmed.indexOf(':');
+            if (colon < 0)
+                continue;
+
+            const QString key = trimmed.left(colon).trimmed();
+            const QString value = trimmed.mid(colon + 1).trimmed();
+
+            while (!stack.isEmpty() && indent <= stack.last().indent)
+                stack.removeLast();
+            stack.append({indent, key});
+
+            if (key == "power_stages")
+            {
+                inPowerStages = true;
+                continue;
+            }
+
+            const QString path = pathFromStack(stack);
+
+            // Global defaults
+            if (path == "loss_model_defaults.switching_energy_vdc_exponent_kV")
+            {
+                bool ok = false;
+                const double kv = value.toDouble(&ok);
+                if (ok)
+                    globalKv = kv;
+                continue;
+            }
+
+            if (!haveStage)
+                continue;
+
+            // Stage metadata
+            if (path.endsWith("display_name") && !value.isEmpty())
+            {
+                current.preset.label = unquote(value);
+                continue;
+            }
+
+            // Gate drive
+            if (path.endsWith("gate_drive.deadtime_min_us"))
+            {
+                bool ok = false;
+                const double deadtime = value.toDouble(&ok);
+                if (ok && deadtime >= 0.0)
+                {
+                    current.preset.has_deadtime_us = true;
+                    current.preset.deadtime_us = deadtime;
+                }
+                continue;
+            }
+
+            // Switching reference voltage
+            if (path.endsWith("device.switching.reference.vdc_V") || path.endsWith("device.switching.reference.vce_V"))
+            {
+                bool ok = false;
+                const double vref = value.toDouble(&ok);
+                if (ok && vref > 0.0)
+                    current.vref_V = vref;
+                continue;
+            }
+
+            // Thermal resistances
+            if (path.endsWith("device.thermal.rth_jc_K_per_W_per_device.igbt_max") ||
+                path.endsWith("device.thermal.rth_jc_K_per_W_per_die.igbt_max"))
+            {
+                bool ok = false;
+                const double val = value.toDouble(&ok);
+                if (ok && val > 0.0)
+                {
+                    current.preset.has_rth_jc_igbt = true;
+                    current.preset.rth_jc_igbt = val;
+                }
+                continue;
+            }
+            if (path.endsWith("device.thermal.rth_jc_K_per_W_per_device.diode_max") ||
+                path.endsWith("device.thermal.rth_jc_K_per_W_per_die.diode_max"))
+            {
+                bool ok = false;
+                const double val = value.toDouble(&ok);
+                if (ok && val > 0.0)
+                {
+                    current.preset.has_rth_jc_diode = true;
+                    current.preset.rth_jc_diode = val;
+                }
+                continue;
+            }
+            if (path.endsWith("device.thermal.rth_cs_K_per_W.typ") ||
+                path.endsWith("device.thermal.rth_case_to_cooler_K_per_W_module.value"))
+            {
+                bool ok = false;
+                const double val = value.toDouble(&ok);
+                if (ok && val > 0.0)
+                {
+                    current.preset.has_rth_cs = true;
+                    current.preset.rth_cs = val;
+                }
+                continue;
+            }
+        }
+
+        finalizeStage();
+
+        QSignalBlocker blocker(ui->powerStagePreset);
+        ui->powerStagePreset->setEnabled(true);
+        ui->powerStagePreset->clear();
+        ui->powerStagePreset->addItem("Custom", QString());
+        for (const auto& preset : m_powerStagePresets)
+            ui->powerStagePreset->addItem(preset.label, preset.key);
+
+        qInfo().noquote() << QString("Loaded %1 power stage presets from %2").arg(m_powerStagePresets.size()).arg(yamlPath);
+        statusBar()->showMessage(QString("Loaded %1 power stages").arg(m_powerStagePresets.size()), 4000);
+
+        const QSettings settings("OpenInverter", "IPMMotorSim");
+        const QString savedKey = settings.value("powerStagePreset").toString();
+        int targetIndex = 0;
+        if (!savedKey.isEmpty())
+        {
+            const auto it = m_powerStagePresetByKey.find(savedKey);
+            if (it != m_powerStagePresetByKey.end())
+                targetIndex = it.value() + 1;
+        }
+        ui->powerStagePreset->setCurrentIndex(targetIndex);
+
+        if (targetIndex > 0)
+        {
+            const PowerStagePreset* preset = findPowerStagePreset(savedKey);
+            if (preset)
+                applyPowerStagePreset(*preset);
+        }
         return;
     }
 
@@ -1183,7 +1617,7 @@ void MainWindow::loadPowerStagePresets()
         return (tj_C >= 100.0) ? 125.0 : 25.0;
     };
 
-    const QStringList lines = QString::fromUtf8(file.readAll()).split('\n');
+    const QStringList lines = yamlContent.split('\n');
     QVector<YamlFrame> stack;
     for (const QString& rawLine : lines)
     {
@@ -1564,6 +1998,9 @@ void MainWindow::loadPowerStagePresets()
     for (const auto& preset : m_powerStagePresets)
         ui->powerStagePreset->addItem(preset.label, preset.key);
 
+    qInfo().noquote() << QString("Loaded %1 power stage presets from %2").arg(m_powerStagePresets.size()).arg(yamlPath);
+    statusBar()->showMessage(QString("Loaded %1 power stages").arg(m_powerStagePresets.size()), 4000);
+
     const QSettings settings("OpenInverter", "IPMMotorSim");
     const QString savedKey = settings.value("powerStagePreset").toString();
     int targetIndex = 0;
@@ -1596,6 +2033,18 @@ void MainWindow::on_powerStagePreset_currentIndexChanged(int index)
 
 void MainWindow::runFor(int num_steps)
 {
+    qInfo().noquote() << QString("runFor: begin steps=%1 dt=%2 time=%3 vdc=%4 pwmfrq_param=%5")
+                             .arg(num_steps)
+                             .arg(m_timestep, 0, 'g', 9)
+                             .arg(m_time, 0, 'g', 9)
+                             .arg(m_Vdc, 0, 'f', 3)
+                             .arg(Param::GetInt(Param::pwmfrq));
+    qInfo().noquote() << QString("runFor: ui_throtcur=%1 Param::throtcur=%2 cb_LogCsv=%3")
+                             .arg(ui->throttleCurrent ? ui->throttleCurrent->text() : QString("<null>"))
+                             .arg(Param::GetFloat(Param::throtcur), 0, 'g', 9)
+                             .arg(ui->cb_LogCsv && ui->cb_LogCsv->isChecked() ? "true" : "false");
+    app::Breadcrumb(QString("runFor: begin steps=%1").arg(num_steps));
+
     double Va = 0;
     double Vb = 0;
     double Vc = 0;
@@ -1652,6 +2101,13 @@ void MainWindow::runFor(int num_steps)
 
     if(num_steps<0)
         return;
+
+    if (!motor)
+    {
+        qCritical().noquote() << "runFor: motor is null";
+        app::Breadcrumb("runFor: motor is null");
+        return;
+    }
 
     QList<QPointF> listIa, listIb, listIc, listIq, listId;
     QList<QPointF> listMFreq, listMPos, listContMPos;
@@ -1710,6 +2166,9 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# module_rth_jc_igbt=" << moduleParams.rth_jc_igbt_C_per_W
                           << ", rth_jc_diode=" << moduleParams.rth_jc_diode_C_per_W
                           << ", rth_cs=" << moduleParams.rth_cs_C_per_W << "\n";
+                logStream << "# throtcur_A_per_pct=" << Param::GetFloat(Param::throtcur) << "\n";
+                logStream << "# fwcurmax_A=" << Param::GetInt(Param::fwcurmax) << "\n";
+                logStream << "# vlimmargin=" << Param::GetInt(Param::vlimmargin) << ", vlimflt=" << Param::GetInt(Param::vlimflt) << "\n";
                 logStream << "# vdc=" << m_Vdc << "\n";
                 logStream << "# modulation_mode=" << modModeStr << "\n";
                 logStream << "# modulation_blend=" << modBlend << "\n";
@@ -1738,6 +2197,9 @@ void MainWindow::runFor(int num_steps)
     //PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat());
     for(int i = 0;i<num_steps; i++)
     {
+        if ((i & 1023) == 0)
+            app::Breadcrumb(QString("runFor: step=%1 time=%2").arg(i).arg(m_time, 0, 'g', 9));
+
         //routines that need calling every 10ms
         if((uint32_t)(m_time*100) != m_old_time)
         {
@@ -1809,6 +2271,15 @@ void MainWindow::runFor(int num_steps)
             const double theta = qDegreesToRadians(motor->getElecPosition());
             const double vd_ctrl = controller.UdVolts(m_Vdc);
             const double vq_ctrl = controller.UqVolts(m_Vdc);
+            if (!std::isfinite(theta) || !std::isfinite(vd_ctrl) || !std::isfinite(vq_ctrl))
+            {
+                qWarning().noquote() << QString("runFor: non-finite ctrl values at step=%1 time=%2 theta=%3 vd=%4 vq=%5")
+                                            .arg(i)
+                                            .arg(m_time, 0, 'g', 9)
+                                            .arg(theta, 0, 'g', 9)
+                                            .arg(vd_ctrl, 0, 'g', 9)
+                                            .arg(vq_ctrl, 0, 'g', 9);
+            }
             const double v_alpha = (vd_ctrl * qCos(theta)) - (vq_ctrl * qSin(theta));
             const double v_beta = (vd_ctrl * qSin(theta)) + (vq_ctrl * qCos(theta));
 
@@ -1896,6 +2367,15 @@ void MainWindow::runFor(int num_steps)
             motor->Step(m_oldVa,m_oldVb,m_oldVc);
         else
             motor->Step(Va,Vb,Vc);
+        if (!std::isfinite(motor->getIaSamp()) || !std::isfinite(motor->getIbSamp()) || !std::isfinite(motor->getIcSamp()))
+        {
+            qWarning().noquote() << QString("runFor: non-finite phase currents at step=%1 time=%2 ia=%3 ib=%4 ic=%5")
+                                        .arg(i)
+                                        .arg(m_time, 0, 'g', 9)
+                                        .arg(motor->getIaSamp(), 0, 'g', 9)
+                                        .arg(motor->getIbSamp(), 0, 'g', 9)
+                                        .arg(motor->getIcSamp(), 0, 'g', 9);
+        }
         m_oldVa = Va;
         m_oldVb = Vb;
         m_oldVb = Vb;
@@ -2036,6 +2516,9 @@ void MainWindow::runFor(int num_steps)
 
         m_time += m_timestep;
     }
+
+    qInfo().noquote() << "runFor: end";
+    app::Breadcrumb("runFor: end");
 
     QString lossInfo;
     if(lossSamples > 0)
@@ -2195,26 +2678,36 @@ void MainWindow::on_LoopFreq_editingFinished()
 
 void MainWindow::on_pbRunFor_clicked()
 {
+    qInfo().noquote() << "UI: RunFor clicked";
+    app::Breadcrumb("UI: RunFor clicked");
     runFor(int(m_runTime/m_timestep));
 }
 
 void MainWindow::on_pbRunFor10s_clicked()
 {
+    qInfo().noquote() << "UI: RunFor10s clicked";
+    app::Breadcrumb("UI: RunFor10s clicked");
     runFor(int(10.0/m_timestep));
 }
 
 void MainWindow::on_pbRunFor1s_clicked()
 {
+    qInfo().noquote() << "UI: RunFor1s clicked";
+    app::Breadcrumb("UI: RunFor1s clicked");
     runFor(int(1.0/m_timestep));
 }
 
 void MainWindow::on_pbRunFor100ms_clicked()
 {
+    qInfo().noquote() << "UI: RunFor100ms clicked";
+    app::Breadcrumb("UI: RunFor100ms clicked");
     runFor(int(0.1/m_timestep));
 }
 
 void MainWindow::on_pbRunFor10ms_clicked()
 {
+    qInfo().noquote() << "UI: RunFor10ms clicked";
+    app::Breadcrumb("UI: RunFor10ms clicked");
     runFor(int(0.01/m_timestep));
 }
 
@@ -2254,11 +2747,15 @@ void MainWindow::on_pbRestart_clicked()
 
 void MainWindow::on_torqueDemand_editingFinished()
 {
+    QSettings settings("OpenInverter", "IPMMotorSim");
+    settings.setValue(ui->torqueDemand->objectName(), ui->torqueDemand->text());
     PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat());
 }
 
 void MainWindow::on_throttleCurrent_editingFinished()
 {
+    QSettings settings("OpenInverter", "IPMMotorSim");
+    settings.setValue(ui->throttleCurrent->objectName(), ui->throttleCurrent->text());
     Param::Set(Param::throtcur, FP_FROMFLT(ui->throttleCurrent->text().toFloat()));
     PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat()); //make sure is recalculated
 }

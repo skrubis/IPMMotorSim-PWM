@@ -8,7 +8,7 @@
 extern volatile uint16_t g_input_angle;
 extern volatile double g_il1_input;
 extern volatile double g_il2_input;
-extern volatile bool disablePWM;
+extern "C" volatile bool disablePWM;
 
 namespace sim
 {

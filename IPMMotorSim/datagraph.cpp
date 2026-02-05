@@ -24,6 +24,7 @@
 #include <QtCharts/QChartView>
 #include <QVBoxLayout>
 #include <QSettings>
+#include <cmath>
 #include <limits>
 
 DataGraph::DataGraph(QString name, QWidget *parent) : QMainWindow(parent)
@@ -209,9 +210,35 @@ void DataGraph::updateGraph(void)
             series->attachAxis(m_axisR);
     }
 
-    m_axisX->setRange(minX, maxX);
-    m_axisL->setRange(minY_L, maxY_L);
-    m_axisR->setRange(minY_R, maxY_R);
+    auto normalizeRange = [](double& min, double& max, double fallbackMin, double fallbackMax)
+    {
+        if(!std::isfinite(min) || !std::isfinite(max) || min > max)
+        {
+            min = fallbackMin;
+            max = fallbackMax;
+            return;
+        }
+        if(min == max)
+        {
+            double delta = (min == 0.0) ? 1.0 : std::abs(min) * 0.1;
+            if(delta == 0.0 || !std::isfinite(delta))
+                delta = 1.0;
+            min -= delta;
+            max += delta;
+        }
+    };
+
+    double xMin = minX, xMax = maxX;
+    double yLMin = minY_L, yLMax = maxY_L;
+    double yRMin = minY_R, yRMax = maxY_R;
+
+    normalizeRange(xMin, xMax, 0.0, 1.0);
+    normalizeRange(yLMin, yLMax, 0.0, 1.0);
+    normalizeRange(yRMin, yRMax, 0.0, 1.0);
+
+    m_axisX->setRange(xMin, xMax);
+    m_axisL->setRange(yLMin, yLMax);
+    m_axisR->setRange(yRMin, yRMax);
 }
 
 void DataGraph::updateXaxis(double min, double max)

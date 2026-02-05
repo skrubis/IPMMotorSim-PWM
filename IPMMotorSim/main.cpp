@@ -18,11 +18,15 @@
  */
 
 #include "mainwindow.h"
+#include "app_logging.h"
 #include <QApplication>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    app::InitLogging();
+    qInfo().noquote() << "IPMMotorSim starting";
+    app::Breadcrumb("startup: QApplication ready");
     MainWindow w;
     w.show();
 
