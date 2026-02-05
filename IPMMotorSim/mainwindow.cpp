@@ -717,7 +717,7 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->eoffPoints, "IGBT Eoff curve points: I, 25C, 125C (mJ) per line.");
     tip(ui->irrPoints, "Diode reverse recovery current points: I, 25C, 125C (A) per line.");
     tip(ui->trrPoints, "Diode reverse recovery time points: I, 25C, 125C (us) per line.");
-    tip(ui->powerStagePreset, "Select a preset from powerstages.yaml to load power-stage parameters.");
+    tip(ui->powerStagePreset, "Select a preset from powerstages.yml to load power-stage parameters.");
     tip(ui->openInverterPreset, "Params Preset: Load an OpenInverter firmware JSON preset. Only sim-relevant values are applied; syncofs/pinswap/respolepairs are ignored/forced safe.");
     tip(ui->browseOpenInverterPreset, "Browse to an OpenInverter params JSON file to load/apply.");
     tip(ui->torqueDemand, "Torque demand in percent.");
@@ -1232,6 +1232,11 @@ QString MainWindow::resolvePowerStageYamlPath() const
 {
     const QString appDir = QCoreApplication::applicationDirPath();
     const QStringList candidates = {
+        // Prefer .yml (repo convention), but still accept .yaml for backward compatibility.
+        QDir(QDir::currentPath()).filePath("powerstages.yml"),
+        QDir(appDir).filePath("powerstages.yml"),
+        QDir(appDir).filePath("../powerstages.yml"),
+        QDir(appDir).filePath("../../powerstages.yml"),
         QDir(QDir::currentPath()).filePath("powerstages.yaml"),
         QDir(appDir).filePath("powerstages.yaml"),
         QDir(appDir).filePath("../powerstages.yaml"),
@@ -1589,9 +1594,9 @@ void MainWindow::loadPowerStagePresets()
     {
         QSignalBlocker blocker(ui->powerStagePreset);
         ui->powerStagePreset->clear();
-        ui->powerStagePreset->addItem("Missing powerstages.yaml", QString());
+        ui->powerStagePreset->addItem("Missing powerstages.yml", QString());
         ui->powerStagePreset->setEnabled(false);
-        qWarning().noquote() << "powerstages.yaml not found (preset dropdown disabled)";
+        qWarning().noquote() << "powerstages.yml not found (preset dropdown disabled)";
         return;
     }
 
@@ -1600,9 +1605,9 @@ void MainWindow::loadPowerStagePresets()
     {
         QSignalBlocker blocker(ui->powerStagePreset);
         ui->powerStagePreset->clear();
-        ui->powerStagePreset->addItem("Unable to read powerstages.yaml", QString());
+        ui->powerStagePreset->addItem("Unable to read powerstages.yml", QString());
         ui->powerStagePreset->setEnabled(false);
-        qWarning().noquote() << QString("Unable to read powerstages.yaml at '%1'").arg(yamlPath);
+        qWarning().noquote() << QString("Unable to read powerstages.yml at '%1'").arg(yamlPath);
         return;
     }
 
@@ -1882,6 +1887,65 @@ void MainWindow::loadPowerStagePresets()
                 {
                     current.preset.has_deadtime_us = true;
                     current.preset.deadtime_us = deadtime;
+                }
+                continue;
+            }
+            if (path.endsWith("gate_drive.vge_on_v"))
+            {
+                bool ok = false;
+                const double v = value.toDouble(&ok);
+                if (ok)
+                {
+                    current.preset.has_vge_on_v = true;
+                    current.preset.vge_on_v = v;
+                }
+                continue;
+            }
+            if (path.endsWith("gate_drive.vge_off_v"))
+            {
+                bool ok = false;
+                const double v = value.toDouble(&ok);
+                if (ok)
+                {
+                    current.preset.has_vge_off_v = true;
+                    current.preset.vge_off_v = v;
+                }
+                continue;
+            }
+            if (path.endsWith("gate_drive.per_device_gate_resistors.rg_on_ohm") ||
+                path.endsWith("gate_drive.effective_per_switch_seen_by_driver.rg_on_ohm"))
+            {
+                bool ok = false;
+                const double r = value.toDouble(&ok);
+                if (ok && r > 0.0)
+                {
+                    current.preset.has_rg_on_ohm = true;
+                    current.preset.rg_on_ohm = r;
+                }
+                continue;
+            }
+            if (path.endsWith("gate_drive.per_device_gate_resistors.rg_off_ohm") ||
+                path.endsWith("gate_drive.effective_per_switch_seen_by_driver.rg_off_ohm"))
+            {
+                bool ok = false;
+                const double r = value.toDouble(&ok);
+                if (ok && r > 0.0)
+                {
+                    current.preset.has_rg_off_ohm = true;
+                    current.preset.rg_off_ohm = r;
+                }
+                continue;
+            }
+
+            // Inverter topology
+            if (path.endsWith("inverter.parallel_devices_per_switch"))
+            {
+                bool ok = false;
+                const int par = value.toInt(&ok);
+                if (ok && par >= 1)
+                {
+                    current.preset.has_parallel_devices_per_switch = true;
+                    current.preset.parallel_devices_per_switch = par;
                 }
                 continue;
             }
@@ -2439,7 +2503,18 @@ void MainWindow::on_powerStagePreset_currentIndexChanged(int index)
         return;
     const PowerStagePreset* preset = findPowerStagePreset(key);
     if (preset)
+    {
         applyPowerStagePreset(*preset);
+        QStringList extras;
+        if (preset->has_parallel_devices_per_switch)
+            extras << QString("par=%1").arg(preset->parallel_devices_per_switch);
+        if (preset->has_vge_on_v || preset->has_vge_off_v)
+            extras << QString("Vge=%1/%2V").arg(preset->vge_on_v, 0, 'g', 4).arg(preset->vge_off_v, 0, 'g', 4);
+        if (preset->has_rg_on_ohm || preset->has_rg_off_ohm)
+            extras << QString("Rg=%1/%2Ω").arg(preset->rg_on_ohm, 0, 'g', 4).arg(preset->rg_off_ohm, 0, 'g', 4);
+        if (!extras.isEmpty())
+            statusBar()->showMessage(QString("%1 (%2)").arg(preset->label).arg(extras.join(", ")), 5000);
+    }
 }
 
 void MainWindow::on_openInverterPreset_currentIndexChanged(int index)
@@ -2560,6 +2635,16 @@ void MainWindow::runFor(int num_steps)
     invParams.integrate_currents_in_pwm = ui->cb_RippleLoss && ui->cb_RippleLoss->isChecked();
     invParams.phase_R_ohm = std::max(0.0, m_Rs);
     invParams.phase_L_H = std::max(0.0, 0.5 * (m_Ld + m_Lq));
+    invParams.has_parallel_devices_per_switch = false;
+    invParams.parallel_devices_per_switch = 1;
+    if (const PowerStagePreset* preset = findPowerStagePreset(presetKey))
+    {
+        if (preset->has_parallel_devices_per_switch)
+        {
+            invParams.has_parallel_devices_per_switch = true;
+            invParams.parallel_devices_per_switch = std::max(1, preset->parallel_devices_per_switch);
+        }
+    }
     invParams.compute_torque_ripple = invParams.integrate_currents_in_pwm;
     invParams.pole_pairs = std::max(0.0, m_Poles);
     invParams.flux_Wb = std::max(0.0, m_fluxLinkage);
@@ -2659,11 +2744,20 @@ void MainWindow::runFor(int num_steps)
                 logStream << "# deadtime_s=" << invParams.deadtime_s << "\n";
                 logStream << "# min_on_s=" << invParams.min_on_s << "\n";
                 logStream << "# min_off_s=" << invParams.min_off_s << "\n";
+                if (invParams.has_parallel_devices_per_switch)
+                    logStream << "# parallel_devices_per_switch=" << invParams.parallel_devices_per_switch << "\n";
                 logStream << "# ripple_loss=" << (invParams.integrate_currents_in_pwm ? "true" : "false")
                           << " (R=" << invParams.phase_R_ohm << " ohm, L=" << invParams.phase_L_H << " H)\n";
                 logStream << "# sink_temp_c=" << invParams.sink_temp_C << "\n";
                 logStream << "# thermal_tau_s=" << invParams.thermal_tau_s << "\n";
                 logStream << "# inverter_module=" << (presetKey.isEmpty() ? "custom" : presetKey) << "\n";
+                if (const PowerStagePreset* preset = findPowerStagePreset(presetKey))
+                {
+                    if (preset->has_vge_on_v || preset->has_vge_off_v)
+                        logStream << "# gate_vge_on_v=" << preset->vge_on_v << ", gate_vge_off_v=" << preset->vge_off_v << "\n";
+                    if (preset->has_rg_on_ohm || preset->has_rg_off_ohm)
+                        logStream << "# gate_rg_on_ohm=" << preset->rg_on_ohm << ", gate_rg_off_ohm=" << preset->rg_off_ohm << "\n";
+                }
                 logStream << "# module_vref_v=" << moduleParams.vref_V << ", kv=" << moduleParams.kv << "\n";
                 logStream << "# module_diode_vf_25c=" << moduleParams.diode_vf_25C_V
                           << ", diode_vf_125c=" << moduleParams.diode_vf_125C_V << "\n";

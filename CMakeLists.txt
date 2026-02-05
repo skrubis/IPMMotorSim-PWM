@@ -80,8 +80,8 @@ target_link_libraries(IPMMotorSim PRIVATE ${QT_LIBS})
 # when running from the build output directory (and when packaging the build folder).
 add_custom_command(TARGET IPMMotorSim POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          ${CMAKE_CURRENT_SOURCE_DIR}/powerstages.yaml
-          $<TARGET_FILE_DIR:IPMMotorSim>/powerstages.yaml
+          ${CMAKE_CURRENT_SOURCE_DIR}/powerstages.yml
+          $<TARGET_FILE_DIR:IPMMotorSim>/powerstages.yml
   VERBATIM
 )
 

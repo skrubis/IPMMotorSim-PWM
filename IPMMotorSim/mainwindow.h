@@ -44,8 +44,18 @@ private:
     {
         QString key;
         QString label;
+        bool has_parallel_devices_per_switch = false;
+        int parallel_devices_per_switch = 1;
         bool has_deadtime_us = false;
         double deadtime_us = 0.0;
+        bool has_vge_on_v = false;
+        double vge_on_v = 0.0;
+        bool has_vge_off_v = false;
+        double vge_off_v = 0.0;
+        bool has_rg_on_ohm = false;
+        double rg_on_ohm = 0.0;
+        bool has_rg_off_ohm = false;
+        double rg_off_ohm = 0.0;
         bool has_vref_v = false;
         double vref_v = 0.0;
         bool has_kv = false;

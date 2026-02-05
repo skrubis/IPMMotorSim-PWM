@@ -78,6 +78,9 @@ struct InverterParams
     double thermal_tau_s = 1.0;
     bool enable_losses = true;
 
+    bool has_parallel_devices_per_switch = false;
+    int parallel_devices_per_switch = 1;
+
     // Phase-B (optional): intra-PWM current integration for loss inputs only.
     // Uses a simple per-phase RL model: di/dt = (v_phase_ln - bemf_phase_ln - R*i)/L
     bool integrate_currents_in_pwm = false;

@@ -67,11 +67,15 @@ static double TorqueNm(double pole_pairs, double flux_Wb, double ld_H, double lq
 }
 
 static double PhaseVoltageFor(double vdc, ConductionElement elem, double absI,
+                              int parallel_devices_per_switch,
                               const PowerModuleParams& module, double tj_igbt_C, double tj_diode_C,
                               double& e_igbt_cond_J, double& e_diode_cond_J, double dt_s)
 {
-    const double vce = IgbtVceSat(module, absI, tj_igbt_C);
-    const double vf = DiodeVf(module, absI, tj_diode_C);
+    const int npar = std::max(1, parallel_devices_per_switch);
+    const double absI_dev = absI / static_cast<double>(npar);
+
+    const double vce = IgbtVceSat(module, absI_dev, tj_igbt_C);
+    const double vf = DiodeVf(module, absI_dev, tj_diode_C);
 
     switch (elem)
     {
@@ -127,6 +131,9 @@ PhaseVoltages InverterSwitchingModel::FromDuty(double vdc, const DutyCycles& dut
         BuildCenterAlignedTimeline(duty, pwm_period_s, params.deadtime_s,
                                    params.min_on_s, params.min_off_s);
 
+    const int npar = (params.has_parallel_devices_per_switch && params.parallel_devices_per_switch >= 1)
+                         ? params.parallel_devices_per_switch
+                         : 1;
     std::array<double, 3> v_int{{0.0, 0.0, 0.0}};
     std::array<double, 3> e_igbt_cond_J{{0.0, 0.0, 0.0}};
     std::array<double, 3> e_diode_cond_J{{0.0, 0.0, 0.0}};
@@ -198,31 +205,32 @@ PhaseVoltages InverterSwitchingModel::FromDuty(double vdc, const DutyCycles& dut
             const LegGateState state = seg.leg[idx];
             elem[idx] = ConductionFor(state, iA);
 
-            v_raw[idx] = PhaseVoltageFor(vdc, elem[idx], absI, m_module, tj_igbt, tj_diode,
+            v_raw[idx] = PhaseVoltageFor(vdc, elem[idx], absI, npar, m_module, tj_igbt, tj_diode,
                                          e_igbt_cond_J[idx], e_diode_cond_J[idx], dt_seg);
 
             GateBools(state, hs_on[idx], ls_on[idx]);
 
             if (have_prev)
             {
+                const double absI_dev = absI / static_cast<double>(npar);
                 if (prev_hs[idx] != hs_on[idx])
                 {
-                    const double e = hs_on[idx] ? IgbtEon(m_module, absI, vdc, tj_igbt)
-                                                : IgbtEoff(m_module, absI, vdc, tj_igbt);
-                    e_igbt_sw_J[idx] += e;
+                    const double e = hs_on[idx] ? IgbtEon(m_module, absI_dev, vdc, tj_igbt)
+                                                : IgbtEoff(m_module, absI_dev, vdc, tj_igbt);
+                    e_igbt_sw_J[idx] += e * static_cast<double>(npar);
                 }
                 if (prev_ls[idx] != ls_on[idx])
                 {
-                    const double e = ls_on[idx] ? IgbtEon(m_module, absI, vdc, tj_igbt)
-                                                : IgbtEoff(m_module, absI, vdc, tj_igbt);
-                    e_igbt_sw_J[idx] += e;
+                    const double e = ls_on[idx] ? IgbtEon(m_module, absI_dev, vdc, tj_igbt)
+                                                : IgbtEoff(m_module, absI_dev, vdc, tj_igbt);
+                    e_igbt_sw_J[idx] += e * static_cast<double>(npar);
                 }
 
                 const bool prev_diode = (prev_elem[idx] == ConductionElement::HsDiode) ||
                                         (prev_elem[idx] == ConductionElement::LsDiode);
                 const bool now_igbt = (elem[idx] == ConductionElement::HsIgbt) || (elem[idx] == ConductionElement::LsIgbt);
                 if (prev_diode && now_igbt)
-                    e_diode_rr_J[idx] += DiodeErr(m_module, absI, vdc, tj_diode);
+                    e_diode_rr_J[idx] += DiodeErr(m_module, absI_dev, vdc, tj_diode) * static_cast<double>(npar);
             }
 
             prev_hs[idx] = hs_on[idx];
@@ -254,8 +262,8 @@ PhaseVoltages InverterSwitchingModel::FromDuty(double vdc, const DutyCycles& dut
                 {
                     const double tj_igbt = m_thermal.igbt_C[idx];
                     const double tj_diode = m_thermal.diode_C[idx];
-                    const double vce = IgbtVceSat(m_module, absAvg, tj_igbt);
-                    const double vf = DiodeVf(m_module, absAvg, tj_diode);
+                    const double vce = IgbtVceSat(m_module, absAvg / static_cast<double>(npar), tj_igbt);
+                    const double vf = DiodeVf(m_module, absAvg / static_cast<double>(npar), tj_diode);
                     const bool isIgbt = (elem[idx] == ConductionElement::HsIgbt) || (elem[idx] == ConductionElement::LsIgbt);
                     const double drop = isIgbt ? vce : vf;
                     const double deltaAbs = absAvg - abs0;
