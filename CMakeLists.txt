@@ -25,7 +25,14 @@ else()
   set(QT_LIBS Qt5::Widgets Qt5::Charts)
 endif()
 
-add_executable(IPMMotorSim WIN32
+set(_ipmmotorsim_exe_flags "")
+if(WIN32)
+  list(APPEND _ipmmotorsim_exe_flags WIN32)
+elseif(APPLE)
+  list(APPEND _ipmmotorsim_exe_flags MACOSX_BUNDLE)
+endif()
+
+add_executable(IPMMotorSim ${_ipmmotorsim_exe_flags}
   IPMMotorSim/main.cpp
   IPMMotorSim/mainwindow.cpp
   IPMMotorSim/chart.cpp

@@ -35,6 +35,19 @@ This repo includes a GitHub Actions workflow that builds and packages ZIP artifa
 - Linux x64
 - macOS
 
+## Prebuilt binaries
+Prebuilt binaries are published on the GitHub **Releases** page for this repository. Download the ZIP for your OS:
+- `IPMMotorSim-windows-x64.zip`
+- `IPMMotorSim-linux-x64.zip`
+- `IPMMotorSim-macos.zip`
+
+After extracting:
+- **Windows**: run `IPMMotorSim.exe`
+- **Linux**: run `./IPMMotorSim`
+- **macOS**: run `IPMMotorSim.app` (you may need to right-click -> Open the first time due to Gatekeeper)
+
+The ZIPs include `powerstages.yaml` and (if present) the `params/` presets next to the executable/app so the dropdowns work out of the box.
+
 The workflow runs only when:
 - you manually start it (Actions -> “Build & Package” -> Run workflow), or
 - you push a git tag matching `v*` (for example `v1.0.0`), which also creates/updates a GitHub Release with the ZIPs attached.
