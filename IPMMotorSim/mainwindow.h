@@ -23,6 +23,7 @@
 #include <QMainWindow>
 #include <QHash>
 #include <QVector>
+#include <QStringList>
 #include "datagraph.h"
 #include "idiqgraph.h"
 #include "sim/motor_plant.h"
@@ -73,6 +74,13 @@ private:
     const PowerStagePreset* findPowerStagePreset(const QString& key) const;
     void applyPowerStagePreset(const PowerStagePreset& preset);
     QString currentPowerStagePresetKey() const;
+
+    void loadOpenInverterParamPresets();
+    QStringList discoverOpenInverterParamPresetFiles() const;
+    void applyOpenInverterParamPresetPath(const QString& jsonPath);
+    void applyOpenInverterParamDefaults();
+    void syncOpenInverterUiFromParams();
+    void enforceSimulationSafeParams(QStringList* warnings);
 
     DataGraph *motorGraph;
     DataGraph *simulationGraph;
@@ -224,6 +232,9 @@ private slots:
 
     void on_rb_OP_Amps_toggled(bool checked);
     void on_powerStagePreset_currentIndexChanged(int index);
+
+    void on_openInverterPreset_currentIndexChanged(int index);
+    void on_browseOpenInverterPreset_clicked();
 
 private:
     Ui::MainWindow *ui;

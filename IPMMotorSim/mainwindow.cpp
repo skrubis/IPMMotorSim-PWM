@@ -29,16 +29,22 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QAction>
 #include <QHelpEvent>
 #include <QIntValidator>
 #include <QFormLayout>
 #include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QMessageBox>
 #include <QLocale>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSettings>
+#include <QSet>
 #include <QTextStream>
 #include <QToolTip>
 #include <QApplication>
@@ -260,6 +266,81 @@ static QMap<QString, double> ParseInlineMap(QString text)
     return values;
 }
 
+static bool TryJsonValueToDouble(const QJsonValue& value, double* out)
+{
+    if (!out)
+        return false;
+
+    if (value.isDouble())
+    {
+        *out = value.toDouble();
+        return true;
+    }
+
+    if (value.isString())
+    {
+        bool ok = false;
+        const double v = value.toString().trimmed().toDouble(&ok);
+        if (!ok)
+            return false;
+        *out = v;
+        return true;
+    }
+
+    return false;
+}
+
+static bool ParseOpenInverterParamsJson(const QString& jsonPath,
+                                       QMap<QString, double>* outParams,
+                                       QString* outError)
+{
+    if (outParams)
+        outParams->clear();
+    if (outError)
+        outError->clear();
+
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (outError)
+            *outError = QString("Failed to open: %1").arg(jsonPath);
+        return false;
+    }
+
+    const QByteArray bytes = file.readAll();
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+    {
+        if (outError)
+            *outError = QString("JSON parse error at offset %1: %2")
+                            .arg(parseError.offset)
+                            .arg(parseError.errorString());
+        return false;
+    }
+
+    if (!doc.isObject())
+    {
+        if (outError)
+            *outError = "JSON root must be an object";
+        return false;
+    }
+
+    QMap<QString, double> params;
+    const QJsonObject obj = doc.object();
+    for (auto it = obj.begin(); it != obj.end(); ++it)
+    {
+        double v = 0.0;
+        if (!TryJsonValueToDouble(it.value(), &v))
+            continue;
+        params.insert(it.key().trimmed(), v);
+    }
+
+    if (outParams)
+        *outParams = params;
+    return true;
+}
+
 static QString HumanizeKey(const QString& key)
 {
     QString out = key;
@@ -462,6 +543,22 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->setupUi(this);
     setAttribute(Qt::WA_AlwaysShowToolTips, true);
 
+    // Explicitly connect signals for the params preset UI (avoid reliance on connectSlotsByName() with overloaded signals).
+    if (ui->openInverterPreset)
+    {
+        connect(ui->openInverterPreset,
+                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this,
+                &MainWindow::on_openInverterPreset_currentIndexChanged);
+    }
+    if (ui->browseOpenInverterPreset)
+    {
+        connect(ui->browseOpenInverterPreset,
+                &QPushButton::clicked,
+                this,
+                &MainWindow::on_browseOpenInverterPreset_clicked);
+    }
+
     QSettings settings("OpenInverter", "IPMMotorSim");
     qInfo().noquote() << QString("QSettings: cb_LogCsv contains=%1 value='%2' throttleCurrent contains=%3 value='%4'")
                              .arg(settings.contains("cb_LogCsv") ? "true" : "false")
@@ -599,6 +696,8 @@ MainWindow::MainWindow(QWidget *parent) :
     tip(ui->irrPoints, "Diode reverse recovery current points: I, 25C, 125C (A) per line.");
     tip(ui->trrPoints, "Diode reverse recovery time points: I, 25C, 125C (us) per line.");
     tip(ui->powerStagePreset, "Select a preset from powerstages.yaml to load power-stage parameters.");
+    tip(ui->openInverterPreset, "Select an OpenInverter params JSON preset (from ./params) or choose Default to use firmware defaults.");
+    tip(ui->browseOpenInverterPreset, "Browse to an OpenInverter params JSON file to load/apply.");
     tip(ui->torqueDemand, "Torque demand in percent.");
     tip(ui->throttleCurrent, "Current per percent throttle (A/%).");
     tip(ui->opMode, "Controller mode: 1=Run, 2=Manual.");
@@ -732,6 +831,14 @@ MainWindow::MainWindow(QWidget *parent) :
     Param::SetFloat(Param::udc, m_Vdc);
 
     motor = new sim::MotorPlant(m_wheelSize,m_gearRatio,m_roadGradient,m_vehicleWeight,m_Lq,m_Ld,m_Rs,m_Poles,m_fluxLinkage,m_timestep,m_syncdelay,m_samplingPoint);
+
+    loadOpenInverterParamPresets();
+    {
+        QSettings settings("OpenInverter", "IPMMotorSim");
+        const QString selection = settings.value("openinverter/paramsPresetSelection").toString();
+        if (!selection.isEmpty())
+            on_openInverterPreset_currentIndexChanged(ui->openInverterPreset ? ui->openInverterPreset->currentIndex() : 0);
+    }
 
     // Ensure Param state reflects the UI (including restored settings) even if the user hasn't focused/edited fields.
     // Without this, persisted UI values like throttle current can be displayed but not actually applied to the controller.
@@ -1126,6 +1233,282 @@ QString MainWindow::currentPowerStagePresetKey() const
     if (!ui || !ui->powerStagePreset)
         return QString();
     return ui->powerStagePreset->currentData().toString();
+}
+
+QStringList MainWindow::discoverOpenInverterParamPresetFiles() const
+{
+    QStringList dirs;
+    const QString appDir = QCoreApplication::applicationDirPath();
+    dirs << QDir(appDir).filePath("params");
+    dirs << QDir::current().filePath("params");
+    dirs << QDir(appDir).absoluteFilePath("../params");
+
+    QStringList paths;
+    QSet<QString> seen;
+    for (const QString& dirPath : dirs)
+    {
+        QDir dir(dirPath);
+        if (!dir.exists())
+            continue;
+
+        const QStringList names = dir.entryList(QStringList() << "*.json", QDir::Files, QDir::Name);
+        for (const QString& name : names)
+        {
+            const QString abs = dir.absoluteFilePath(name);
+            if (seen.contains(abs))
+                continue;
+            seen.insert(abs);
+            paths.append(abs);
+        }
+    }
+
+    std::sort(paths.begin(), paths.end(),
+              [](const QString& a, const QString& b)
+              {
+                  const QFileInfo fa(a);
+                  const QFileInfo fb(b);
+                  const int cmp = QString::compare(fa.fileName(), fb.fileName(), Qt::CaseInsensitive);
+                  if (cmp != 0)
+                      return cmp < 0;
+                  return a < b;
+              });
+
+    return paths;
+}
+
+void MainWindow::loadOpenInverterParamPresets()
+{
+    if (!ui || !ui->openInverterPreset)
+        return;
+
+    QSignalBlocker blocker(ui->openInverterPreset);
+    ui->openInverterPreset->clear();
+    ui->openInverterPreset->addItem("Default (built-in)", QString());
+
+    const QStringList presetPaths = discoverOpenInverterParamPresetFiles();
+    for (const QString& path : presetPaths)
+    {
+        const QFileInfo info(path);
+        ui->openInverterPreset->addItem(info.fileName(), path);
+        ui->openInverterPreset->setItemData(ui->openInverterPreset->count() - 1, path, Qt::ToolTipRole);
+    }
+
+    QSettings settings("OpenInverter", "IPMMotorSim");
+    const QString selection = settings.value("openinverter/paramsPresetSelection").toString();
+    if (selection == "default")
+    {
+        ui->openInverterPreset->setCurrentIndex(0);
+        return;
+    }
+
+    if (!selection.isEmpty())
+    {
+        for (int i = 0; i < ui->openInverterPreset->count(); ++i)
+        {
+            if (ui->openInverterPreset->itemData(i).toString() == selection)
+            {
+                ui->openInverterPreset->setCurrentIndex(i);
+                return;
+            }
+        }
+
+        // Saved preset points to a file that's not in the discovered list; add it as a custom entry.
+        const QFileInfo info(selection);
+        ui->openInverterPreset->addItem(info.fileName(), selection);
+        ui->openInverterPreset->setItemData(ui->openInverterPreset->count() - 1, selection, Qt::ToolTipRole);
+        ui->openInverterPreset->setCurrentIndex(ui->openInverterPreset->count() - 1);
+    }
+}
+
+void MainWindow::enforceSimulationSafeParams(QStringList* warnings)
+{
+    const int oldSyncofs = Param::GetInt(Param::syncofs);
+    const int oldPinswap = Param::GetInt(Param::pinswap);
+    const int oldResPoles = Param::GetInt(Param::respolepairs);
+    const int motorPoles = std::max(1, Param::GetInt(Param::polepairs));
+
+    Param::SetInt(Param::syncofs, 0);
+    Param::SetInt(Param::pinswap, 0);
+    Param::SetInt(Param::respolepairs, motorPoles);
+
+    if (warnings)
+    {
+        if (oldSyncofs != 0)
+            warnings->append(QString("Forced syncofs=%1 -> 0 for simulation stability").arg(oldSyncofs));
+        if (oldPinswap != 0)
+            warnings->append(QString("Forced pinswap=%1 -> 0 (pin swap not simulated)").arg(oldPinswap));
+        if (oldResPoles != motorPoles)
+            warnings->append(QString("Forced respolepairs=%1 -> %2 to match polepairs").arg(oldResPoles).arg(motorPoles));
+    }
+}
+
+void MainWindow::syncOpenInverterUiFromParams()
+{
+    if (!ui)
+        return;
+
+    QStringList warnings;
+    enforceSimulationSafeParams(&warnings);
+
+    {
+        ScopedSignalBlockerAll blockSignals(this);
+        ui->LqMinusLd->setText(QString::number(Param::GetFloat(Param::lqminusld), 'f', 1));
+        ui->FluxLinkage->setText(QString::number(Param::GetInt(Param::fluxlinkage)));
+        ui->SyncAdv->setText(QString::number(Param::GetInt(Param::syncadv)));
+        ui->FreqMax->setText(QString::number(Param::GetFloat(Param::fmax), 'f', 1));
+        ui->Poles->setText(QString::number(Param::GetInt(Param::polepairs)));
+        ui->CurrentKp->setText(QString::number(Param::GetInt(Param::iqkp)));
+        ui->CurrentKi->setText(QString::number(Param::GetInt(Param::curki)));
+        ui->VLimMargin->setText(QString::number(Param::GetInt(Param::vlimmargin)));
+        ui->VLimFlt->setText(QString::number(Param::GetInt(Param::vlimflt)));
+        ui->FWCurrMax->setText(QString::number(Param::GetInt(Param::fwcurmax)));
+        ui->IdManual->setText(QString::number(Param::GetFloat(Param::manualid), 'f', 1));
+        ui->IqManual->setText(QString::number(Param::GetFloat(Param::manualiq), 'f', 1));
+        ui->throttleCurrent->setText(QString::number(Param::GetFloat(Param::throtcur), 'f', 1));
+        ui->SyncOfs->setText("0");
+
+        const double pwmHz = PwmFrequencyHzFromParam(Param::GetInt(Param::pwmfrq));
+        if (pwmHz > 0.0)
+            ui->LoopFreq->setText(QString::number(pwmHz, 'f', 0));
+    }
+
+    // Apply to Param + motor plant.
+    on_Vdc_editingFinished();
+    on_LoopFreq_editingFinished();
+    on_Poles_editingFinished();
+    on_FluxLinkage_editingFinished();
+    on_LqMinusLd_editingFinished();
+    on_SyncAdv_editingFinished();
+    on_FreqMax_editingFinished();
+    on_CurrentKp_editingFinished();
+    on_CurrentKi_editingFinished();
+    on_VLimMargin_editingFinished();
+    on_VLimFlt_editingFinished();
+    on_FWCurrMax_editingFinished();
+    on_IdManual_editingFinished();
+    on_IqManual_editingFinished();
+    on_throttleCurrent_editingFinished();
+    on_SyncOfs_editingFinished();
+
+    // Sanity checks against the simulation-side motor model inputs.
+    bool okLq = false, okLd = false;
+    const double lq_mH = ui->Lq->text().toDouble(&okLq);
+    const double ld_mH = ui->Ld->text().toDouble(&okLd);
+    const double lqMinusLd_mH = Param::GetFloat(Param::lqminusld);
+    if (okLq && okLd)
+    {
+        const double diff_mH = lq_mH - ld_mH;
+        if (diff_mH < 0.0)
+            warnings.append(QString("Simulation Lq (%1 mH) < Ld (%2 mH); expected Lq>=Ld for IPM").arg(lq_mH).arg(ld_mH));
+        if (std::abs(diff_mH - lqMinusLd_mH) > std::max(0.1, 0.2 * std::abs(lqMinusLd_mH)))
+        {
+            warnings.append(QString("Simulation (Lq-Ld)=%1 mH differs from preset lqminusld=%2 mH; plant and controller may not match")
+                                .arg(diff_mH, 0, 'g', 6)
+                                .arg(lqMinusLd_mH, 0, 'g', 6));
+        }
+    }
+
+    Param::Change(Param::PARAM_LAST);
+
+    for (const QString& w : warnings)
+        qWarning().noquote() << QString("Params preset: %1").arg(w);
+    if (!warnings.isEmpty())
+        statusBar()->showMessage(QString("Preset applied with %1 warning(s) (see log)").arg(warnings.size()), 8000);
+    else
+        statusBar()->showMessage("Preset applied", 3000);
+}
+
+void MainWindow::applyOpenInverterParamDefaults()
+{
+    Param::LoadDefaults();
+    syncOpenInverterUiFromParams();
+}
+
+void MainWindow::applyOpenInverterParamPresetPath(const QString& jsonPath)
+{
+    Param::LoadDefaults();
+
+    QMap<QString, double> values;
+    QString error;
+    if (!ParseOpenInverterParamsJson(jsonPath, &values, &error))
+    {
+        QMessageBox::warning(this, "Params preset load failed",
+                             QString("Failed to load params preset:\n%1\n\n%2").arg(jsonPath, error));
+        return;
+    }
+
+    // Only apply parameters that the simulator actually uses.
+    const QSet<QString> allowed = {
+        "pwmfrq",
+        "iqkp",
+        "idkp",
+        "curki",
+        "vlimflt",
+        "vlimmargin",
+        "fwcurmax",
+        "lqminusld",
+        "fluxlinkage",
+        "syncadv",
+        "fmax",
+        "polepairs",
+        "manualiq",
+        "manualid",
+        "throtcur",
+    };
+
+    const bool hasIqkp = values.contains("iqkp");
+    const bool hasIdkp = values.contains("idkp");
+
+    int applied = 0;
+    int outOfRange = 0;
+    QStringList warnings;
+
+    auto applyParam = [&](const QString& name, double v)
+    {
+        const QByteArray utf8 = name.toUtf8();
+        const Param::PARAM_NUM idx = Param::NumFromString(utf8.constData());
+        if (idx == Param::PARAM_INVALID)
+        {
+            return;
+        }
+
+        if (Param::Set(idx, FP_FROMFLT(v)) != 0)
+        {
+            ++outOfRange;
+            warnings.append(QString("Ignored out-of-range '%1'=%2").arg(name).arg(v, 0, 'g', 12));
+            return;
+        }
+        ++applied;
+    };
+
+    for (auto it = values.begin(); it != values.end(); ++it)
+    {
+        const QString key = it.key();
+        const double v = it.value();
+
+        // Compatibility: newer firmware uses "curkp" for the current controller Kp.
+        if (key == "curkp" && !(hasIqkp || hasIdkp))
+        {
+            applyParam("iqkp", v);
+            applyParam("idkp", v);
+            continue;
+        }
+
+        if (!allowed.contains(key))
+            continue;
+
+        applyParam(key, v);
+    }
+
+    // Ensure UI reflects the new Param state and motor/controller are updated.
+    syncOpenInverterUiFromParams();
+
+    qInfo().noquote() << QString("Params preset applied: file='%1' applied=%2 out_of_range=%3 (filtered)")
+                             .arg(jsonPath)
+                             .arg(applied)
+                             .arg(outOfRange);
+    for (const QString& w : warnings)
+        qWarning().noquote() << QString("Params preset: %1").arg(w);
 }
 
 void MainWindow::applyPowerStagePreset(const PowerStagePreset& preset)
@@ -2031,6 +2414,66 @@ void MainWindow::on_powerStagePreset_currentIndexChanged(int index)
         applyPowerStagePreset(*preset);
 }
 
+void MainWindow::on_openInverterPreset_currentIndexChanged(int index)
+{
+    Q_UNUSED(index);
+    if (!ui || !ui->openInverterPreset)
+        return;
+
+    const QString data = ui->openInverterPreset->currentData().toString();
+    if (ui->openInverterPreset->currentIndex() <= 0)
+        applyOpenInverterParamDefaults();
+    else
+        applyOpenInverterParamPresetPath(data);
+
+    QSettings settings("OpenInverter", "IPMMotorSim");
+    if (ui->openInverterPreset->currentIndex() <= 0)
+        settings.setValue("openinverter/paramsPresetSelection", "default");
+    else
+        settings.setValue("openinverter/paramsPresetSelection", data);
+}
+
+void MainWindow::on_browseOpenInverterPreset_clicked()
+{
+    if (!ui || !ui->openInverterPreset)
+        return;
+
+    QSettings settings("OpenInverter", "IPMMotorSim");
+    const QString lastDir = settings.value("openinverter/paramsPresetBrowseDir").toString();
+    const QString startDir = !lastDir.isEmpty() ? lastDir : QDir::current().absolutePath();
+
+    const QString path = QFileDialog::getOpenFileName(this,
+                                                      "Open OpenInverter params JSON",
+                                                      startDir,
+                                                      "JSON files (*.json)");
+    if (path.isEmpty())
+        return;
+
+    settings.setValue("openinverter/paramsPresetBrowseDir", QFileInfo(path).absolutePath());
+
+    // Add (or select) as a custom entry.
+    int existing = -1;
+    for (int i = 0; i < ui->openInverterPreset->count(); ++i)
+    {
+        if (ui->openInverterPreset->itemData(i).toString() == path)
+        {
+            existing = i;
+            break;
+        }
+    }
+
+    if (existing >= 0)
+    {
+        ui->openInverterPreset->setCurrentIndex(existing);
+        return;
+    }
+
+    const QFileInfo info(path);
+    ui->openInverterPreset->addItem(info.fileName(), path);
+    ui->openInverterPreset->setItemData(ui->openInverterPreset->count() - 1, path, Qt::ToolTipRole);
+    ui->openInverterPreset->setCurrentIndex(ui->openInverterPreset->count() - 1);
+}
+
 void MainWindow::runFor(int num_steps)
 {
     qInfo().noquote() << QString("runFor: begin steps=%1 dt=%2 time=%3 vdc=%4 pwmfrq_param=%5")
@@ -2674,6 +3117,8 @@ void MainWindow::on_FluxLinkage_editingFinished()
 void MainWindow::on_LoopFreq_editingFinished()
 {
     m_timestep = 1.0 / ui->LoopFreq->text().toDouble();
+    if (motor)
+        motor->setTimestep(m_timestep);
 }
 
 void MainWindow::on_pbRunFor_clicked()

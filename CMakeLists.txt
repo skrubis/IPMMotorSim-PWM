@@ -83,3 +83,14 @@ add_custom_command(TARGET IPMMotorSim POST_BUILD
           $<TARGET_FILE_DIR:IPMMotorSim>/powerstages.yaml
   VERBATIM
 )
+
+# Ship OpenInverter parameter presets next to the executable so the UI preset dropdown works
+# when running from the build output directory (and when packaging the build folder).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/params")
+  add_custom_command(TARGET IPMMotorSim POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/params
+            $<TARGET_FILE_DIR:IPMMotorSim>/params
+    VERBATIM
+  )
+endif()

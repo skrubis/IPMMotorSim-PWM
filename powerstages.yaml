@@ -1,330 +1,374 @@
-# power_stages.yaml
 schema_version: 1
+
+meta:
+  generated_date: "2026-02-05"
+  purpose: >
+    Power-stage presets for IPMMotorSim / event-level PWM loss estimation.
+    Values marked "user-provided" are placeholders until you (or Codex) replace them
+    with digitized curves or teardown-confirmed parts.
+
 units:
   voltage: V
   current: A
-  energy_switching: mJ
-  energy_recovery: mJ
-  time: us
-  thermal_resistance: K_per_W
+  resistance: ohm
+  energy: mJ
+  charge: uC
   capacitance: uF
-  resistance: mOhm
   inductance: nH
-
-loss_model_defaults:
-  switching_energy_vdc_exponent_kV: 1.0     # first-pass: E ∝ Vdc
-  current_exponent_kI_sw: 1.10             # first-pass: E ∝ I^k (tune later)
-  allocate_diode_recovery_to: "turn_on_switch"
-  temperature_interp_points_C: [25, 125, 175]
-  notes:
-    - "Prefer event-based accounting: add Eon/Eoff/Err only at edges, integrate conduction per interval."
-    - "For parallel devices: evaluate curves at I_device = I_switch/N, then multiply energies by N."
+  temperature: C
+  thermal_resistance: K_per_W
+  time: ns
 
 power_stages:
-
-  - id: tesla_sdu_auirgps4070d0_6p
-    display_name: "Tesla/SDU (Model S/X) AUIRGPS4070D0 x6 per switch"
-    topology: "3ph_2level"
-    per_switch_parallel: 6
-
-    dc_link:
-      architecture: "film_single_lumped"
-      capacitance_uF: 450
-      voltage_rating_V: 430
-      esr_mOhm: null
-      esl_nH: null
-      notes:
-        - "Film DC-link capacitor reported on SDU board (Panasonic ~450uF/430V)."
-        - "If modeling cap heating later: add Irms_cap and ESR."
-
-    gate_drive:
-      vge_on_V: 15.0
-      vge_off_V: -8.0
-      rg_on_ohm_per_device: 10.0
-      rg_off_ohm_per_device: 30.1
-      notes:
-        - "Per-device gate resistors (turn-on/turn-off) from teardown."
+  # ---------------------------------------------------------------------------
+  # TESLA SDU (Model S/X small drive unit) - discrete IGBTs in parallel
+  # ---------------------------------------------------------------------------
+  - id: tesla_sdu_model_sx_auirgps4070d0_x6
+    display_name: "Tesla SDU (S/X) AUIRGPS4070D0 x6 per switch"
+    topology: three_phase_2level_discrete
+    inverter:
+      switches_total: 6
+      parallel_devices_per_switch: 6
 
     device:
-      kind: "igbt_with_antiparallel_diode"
-      part: "AUIRGPS4070D0"
+      category: igbt_discrete_with_antiparallel_diode
+      manufacturer: Infineon
+      part_number: AUIRGPS4070D0
       ratings:
-        vces_max_V: 600
-        tj_max_C: 175
+        vces_max_v: 600
+        ic_nominal_a: 120
+        ic_continuous_a:
+          tc_25c: 240
+          tc_100c: 160
+        tj_max_c: 175
 
       conduction:
-        # Minimal anchors; replace with digitized Vce/Vf curves if needed.
-        igbt_vce_sat_points_V:
-          # format: [Ic_A, Tj_C, Vce_typ_V]
-          - [120,  25, 1.70]
-          - [120, 175, 2.10]
-        diode_vf_points_V:
-          - [120,  25, 1.60]
-          - [120, 175, 1.90]
+        vce_sat:
+          # Datasheet point @ IC=120A, VGE=15V
+          ic_a: 120
+          tj_points:
+            - tj_c: 25
+              typ_v: 1.7
+              max_v: 2.0
+            - tj_c: 150
+              typ_v: 2.0
+            - tj_c: 175
+              typ_v: 2.1
+        diode_vf:
+          if_a: 120
+          tj_points:
+            - tj_c: 25
+              typ_v: 1.8
+              max_v: 2.1
+            - tj_c: 175
+              typ_v: 1.9
 
       switching:
-        reference:
-          vdc_V: 400
-          vge_V: 15
-          rg_ohm: 4.7
-        igbt_eon_points_mJ:
-          # format: [Ic_A, Tj_C, Eon_mJ]
-          - [120,  25, 5.70]
-          - [120, 175, 6.40]
-        igbt_eoff_points_mJ:
-          - [120,  25, 4.20]
-          - [120, 175, 4.70]
-        diode_erec_points_mJ:
-          # datasheet commonly quotes Erec in uJ; store as mJ here
-          - [120,  25, 1.07]
-          - [120, 175, 1.74]
+        energies_mj:
+          # Datasheet switching numbers (includes diode recovery per note)
+          conditions:
+            ic_a: 120
+            vcc_v: 400
+            vge_v: 15
+            rg_ohm: 4.7
+            tj_c: 25
+          eon_typ: 5.7
+          eon_max: 6.7
+          eoff_typ: 4.2
+          eoff_max: 5.2
+          etotal_typ: 9.9
+          etotal_max: 11.9
 
       thermal:
-        rth_jc_K_per_W_per_device:
-          igbt_max: 0.20
-          diode_max: 0.45
-        rth_cs_K_per_W:
-          typ: 0.24
-
-    modeling_hints:
-      parallel_current_split: "equal"
-      diode_rr_included_in_eon: false
-
-
-  - id: tesla_ldu_ikw75n60t_16p
-    display_name: "Tesla/LDU (Model S) IKW75N60T x16 per switch + 3x400uF film"
-    topology: "3ph_2level"
-    per_switch_parallel: 16
-
-    dc_link:
-      architecture: "film_distributed_per_leg"
-      per_leg_capacitance_uF: 400
-      legs: 3
-      total_capacitance_uF: 1200
-      voltage_rating_V: 450
-      esr_mOhm_per_leg: null
-      esl_nH_per_leg: null
-      notes:
-        - "Per your teardown: each leg has 400uF 450V film cap. Model as distributed or lumped (1200uF)."
+        rth_jc_igbt_k_per_w_max: 0.20
+        rth_jc_diode_k_per_w_max: 0.45
+        rth_cs_k_per_w_typ: 0.24
 
     gate_drive:
-      vge_on_V: 15.0
-      vge_off_V: 0.0
-      rg_on_ohm_per_device: null
-      rg_off_ohm_per_device: null
-      notes:
-        - "Set Rg once measured; switching energies depend strongly on Rg."
-
-    device:
-      kind: "igbt_with_antiparallel_diode"
-      part: "IKW75N60T"
-      ratings:
-        vces_max_V: 600
-        ic_dc_A: 75
-        tj_max_C: 175
-
-      conduction:
-        igbt_vce_sat_points_V:
-          # [Ic_A, Tj_C, Vce_typ_V, Vce_max_V?]
-          - [75,  25, 1.50, 2.00]
-          - [75, 175, 1.90, null]
-        diode_vf_points_V:
-          - [75,  25, 1.65, 2.00]
-          - [75, 175, 1.60, null]
-
-      switching:
-        reference:
-          vce_V: 400
-          vge_on_off_V: "0/15"
-          rg_ohm: 5
-          tj_C: 175
-        flags:
-          eon_includes_diode_recovery: true
-        # rough starter digitization at Tj=175C; replace with proper digitized curves later
-        igbt_eon_curve_mJ_vs_Ic_A:
-          - [20, 0.9]
-          - [40, 1.5]
-          - [60, 2.3]
-          - [75, 2.9]
-          - [100, 4.3]
-          - [120, 5.8]
-          - [140, 8.0]
-        igbt_eoff_curve_mJ_vs_Ic_A:
-          - [20, 0.8]
-          - [40, 1.3]
-          - [60, 2.0]
-          - [75, 2.5]
-          - [100, 3.8]
-          - [120, 4.8]
-          - [140, 6.0]
-
-      thermal:
-        rth_jc_K_per_W_per_device:
-          igbt_max: 0.35
-          diode_max: 0.60
-        rth_ja_K_per_W: 40
-
-    modeling_hints:
-      parallel_current_split: "equal"
-      diode_rr_included_in_eon: true
-
-
-  - id: vectrix_pm300cla060_ipm_300a_600v_murata_mlcc
-    display_name: "Vectrix/PM300CLA060 (IPM brick) + 4x Murata MLCC 80uF 250V"
-    topology: "3ph_2level_module"
-    per_switch_parallel: 1
+      vge_on_v: 15
+      vge_off_v: -8
+      per_device_gate_resistors:
+        # From Ohm Ninja SDU teardown: each device has its own resistor
+        rg_on_ohm: 10.0
+        rg_off_ohm: 30.1
+      effective_per_switch_seen_by_driver:
+        # Simple parallel math (useful for a first-order gate-current model)
+        rg_on_ohm: 1.67   # ~10/6
+        rg_off_ohm: 5.02  # ~30.1/6
+      notes: "Gate driver IC + booster stage details are in the Ohm Ninja teardown."
 
     dc_link:
-      architecture: "mlcc_local_lumped"
-      capacitor_count: 4
-      per_cap:
-        type: "mlcc_module"
-        markings_seen:
-          - "Murata 7717471"
-          - "Marking 7205432 (other photos)"
-        capacitance_uF_nominal: 80
-        voltage_rating_V: 250
-      total_capacitance_uF_nominal: 320
-      dc_bias_derating_factor: null     # set (e.g. 0.4..0.8) if you want effective C at operating Vdc
-      esr_mOhm_total: null
-      esl_nH_total: null
-      notes:
-        - "Per your schematic/photos: 4x 80uF 250V MLCC modules on the powerstage."
-        - "MLCC effective C can drop a lot with DC bias; add derating if modeling Vdc ripple."
+      voltage_class_v: 430
+      capacitors:
+        - type: film
+          manufacturer: Panasonic
+          capacitance_uF_each: 450
+          voltage_v: 430
+          count: null
+          notes: "Ohm Ninja identifies Panasonic 450µF/430V film parts; quantity not stated."
+      notes: >
+        DC-link C matters most for ripple current, bus ripple, and EMI/overshoot;
+        it only weakly affects *device* loss math unless you model ripple & spikes.
 
-    gate_drive:
-      vge_on_V: 15.0
-      vge_off_V: 0.0
-      deadtime_min_us: 2.0
-      pwm_max_kHz: 20
+  # ---------------------------------------------------------------------------
+  # TESLA LDU (Model S large drive unit) - user-provided parallel count
+  # ---------------------------------------------------------------------------
+  - id: tesla_ldu_ikw75n60t_x16
+    display_name: "Tesla LDU (Model S) IKW75N60T x16 per switch"
+    topology: three_phase_2level_discrete
+    inverter:
+      switches_total: 6
+      parallel_devices_per_switch: 16  # user-provided (teardown observation)
 
     device:
-      kind: "igbt_module_with_diodes"
-      part: "PM300CLA060"
+      category: igbt_discrete_with_antiparallel_diode
+      manufacturer: Infineon
+      part_number: IKW75N60T
       ratings:
-        vces_max_V: 600
-        ic_continuous_A: 300
-        ic_pulse_A: 600
-        tj_max_C: 150
+        vces_max_v: 600
+        ic_nominal_a: 75
+        tj_max_c: 175
 
       conduction:
-        igbt_vce_sat_points_V:
-          # [Ic_A, Tj_C, Vce_typ_V, Vce_max_V]
-          - [300,  25, 1.60, 2.40]
-          - [300, 125, 1.50, 2.00]
-        diode_vf_points_V:
-          - [300,  25, 2.20, 3.30]
+        vce_sat:
+          ic_a: 75
+          vge_v: 15
+          tj_points:
+            - tj_c: 25
+              typ_v: 1.5
+              max_v: 2.0
+            - tj_c: 175
+              typ_v: 1.9
+        diode_vf:
+          if_a: 75
+          vge_v: 0
+          tj_points:
+            - tj_c: 25
+              typ_v: 1.65
+              max_v: 2.0
+            - tj_c: 175
+              typ_v: 1.6
 
       switching:
-        reference:
-          vdc_V: 300
-          vdrive_V: 15
-        # good starter points (digitized/approx from datasheet plots; refine later)
-        igbt_eoff_points_mJ:
-          # [Ic_A, Tj_C, Eoff_mJ]
-          - [100,  25, 1.04]
-          - [200,  25, 3.91]
-          - [300,  25, 8.33]
-          - [100, 125, 2.37]
-          - [200, 125, 6.13]
-          - [300, 125, 11.44]
-        igbt_eon_points_mJ:
-          # provisional (plot has discontinuity); replace with proper digitization when you care
-          - [100,  25, 3.72]
-          - [200,  25, 6.37]
-          - [300,  25, 7.80]
-          - [100, 125, 4.64]
-          - [200, 125, 7.22]
-          - [300, 125, 8.80]
-        diode_reverse_recovery:
-          irr_points_A:
-            # [Ic_A, Tj_C, Irr_A]
-            - [100,  25, 31.6]
-            - [200,  25, 72.5]
-            - [300,  25, 82.5]
-            - [100, 125, 85.6]
-            - [200, 125, 109.4]
-            - [300, 125, 128.5]
-          trr_points_us:
-            # [Ic_A, Tj_C, trr_us]
-            - [100,  25, 0.120]
-            - [200,  25, 0.115]
-            - [300,  25, 0.115]
-            - [100, 125, 0.245]
-            - [200, 125, 0.195]
-            - [300, 125, 0.195]
-          approximations:
-            qrr_model: "Qrr ~= 0.5*Irr*trr"
-            err_model: "Err ~= Vdc*Qrr"
+        energies_mj:
+          # Datasheet "Inductive Load" table
+          conditions_common:
+            vcc_v: 400
+            ic_a: 75
+            vge_v: 15
+            rg_ohm: 5
+          tj_points:
+            - tj_c: 25
+              eon_mj: 2.0
+              eoff_mj: 2.5
+              ets_mj: 4.5
+              diode:
+                trr_ns: 121
+                qrr_uC: 2.4
+                irrm_a: 38.5
+            - tj_c: 175
+              eon_mj: 2.9
+              eoff_mj: 2.9
+              ets_mj: 5.8
+              diode:
+                trr_ns: 182
+                qrr_uC: 5.8
+                irrm_a: 56.2
 
       thermal:
-        rth_jc_K_per_W_per_die:
-          igbt_max: 0.16
-          diode_max: 0.25
-        rth_case_to_cooler_K_per_W_module:
-          value: 0.023
-
-    modeling_hints:
-      diode_rr_included_in_eon: false
-
-
-  - id: bmw_i3_generic_650v_igbt_module_fs600r07a2e3_proxy
-    display_name: "BMW i3 / Generic 650V IGBT module (HybridPACK2 FS600R07A2E3 proxy)"
-    topology: "3ph_2level_module"
-    per_switch_parallel: 1
+        rth_jc_igbt_k_per_w_max: 0.35
+        rth_jc_diode_k_per_w_max: 0.60
 
     dc_link:
-      architecture: "vehicle_packaged_unknown"
-      capacitance_uF: null
-      voltage_rating_V: null
-      notes:
-        - "Use stiff Vdc for silicon-loss sweeps; add C/ESR when you start comparing DC-link heating."
+      voltage_class_v: 450
+      capacitors:
+        - type: film
+          voltage_v: 450
+          capacitance_uF_each: 400
+          count: 3
+          notes: "user-provided: ~400µF film per phase leg (distributed)"
+      notes: "Distributed DC-link film can reduce commutation loop inductance and local ripple."
 
-    gate_drive:
-      vge_on_V: 15.0
-      vge_off_V: -15.0
+  # ---------------------------------------------------------------------------
+  # NISSAN LEAF GEN2 inverter - Infineon HybridPACK2 (single-switch module)
+  # ---------------------------------------------------------------------------
+  - id: nissan_leaf_gen2_fs800r07a2e3
+    display_name: "Nissan Leaf Gen2 FS800R07A2E3 + Panasonic 1074µF"
+    topology: three_phase_2level_module_or_discrete
+    inverter:
+      switches_total: 6
+      parallel_devices_per_switch: 1
+      notes: >
+        FS800R07A2E3 is a "single" HybridPACK2 device (one switch with diode).
+        Model assumes 6 devices make one 3-phase 2-level inverter.
 
     device:
-      kind: "igbt_module_with_diodes"
-      part: "FS600R07A2E3"
+      category: igbt_module_single_switch_with_diode
+      manufacturer: Infineon
+      part_number: FS800R07A2E3
       ratings:
-        vces_max_V: 650
-        tj_max_C: 150
+        vces_max_v: 650
+        ic_nominal_a: 800
+        ic_continuous_a:
+          tf_75c: 550
+          tf_25c: 700
+        tj_max_c: 175
+
+      parasitics:
+        module_stray_inductance_nH_typ: 14
+        per_switch_lead_resistance_mOhm_typ: 0.80
 
       conduction:
-        # anchor points at IF/IC=400A (starter; good enough for comparative loss sweeps)
-        igbt_vce_sat_points_V:
-          - [400,  25, 1.30, 1.60]
-          - [400, 125, 1.35, null]
-          - [400, 150, 1.40, null]
-        diode_vf_points_V:
-          - [400,  25, 1.40, 1.75]
-          - [400, 125, 1.35, null]
-          - [400, 150, 1.30, null]
+        vce_sat_typ:
+          # Datasheet @ IC=550A
+          ic_a: 550
+          tj_points:
+            - tj_c: 25
+              v_v: 1.30
+            - tj_c: 125
+              v_v: 1.35
+            - tj_c: 150
+              v_v: 1.40
+          vce_sat_max:
+            ic_a: 550
+            tj_c: 25
+            v_v: 1.60
+        diode_vf:
+          if_a: 550
+          tj_points:
+            - tj_c: 25
+              typ_v: 1.40
+              max_v: 1.75
+            - tj_c: 125
+              typ_v: 1.35
+            - tj_c: 150
+              typ_v: 1.30
 
       switching:
-        reference:
-          vdc_V: 300
-          current_A: 400
-          rg_on_ohm: 2.2
-          rg_off_ohm: 1.0
-        igbt_eon_points_mJ:
-          - [400,  25,  9.0]
-          - [400, 125, 11.0]
-          - [400, 150, 11.5]
-        igbt_eoff_points_mJ:
-          - [400,  25, 14.0]
-          - [400, 125, 17.5]
-          - [400, 150, 18.5]
-        diode_erec_points_mJ:
-          - [400,  25,  3.5]
-          - [400, 125,  7.0]
-          - [400, 150,  8.5]
+        energies_mj:
+          # Datasheet @ IC=550A, VCE=300V
+          conditions_common:
+            ic_a: 550
+            vce_v: 300
+            vge_v: 15
+          tj_points:
+            - tj_c: 25
+              eon_mj: 10.5
+              eoff_mj: 21.0
+              diode:
+                erec_mj: 4.0
+                qrr_uC: 17.0
+                irrm_a: 200
+            - tj_c: 125
+              eon_mj: 12.0
+              eoff_mj: 25.0
+              diode:
+                erec_mj: 9.5
+                qrr_uC: 40.0
+                irrm_a: 330
+            - tj_c: 150
+              eon_mj: 12.5
+              eoff_mj: 26.0
+              diode:
+                erec_mj: 11.5
+                qrr_uC: 45.0
+                irrm_a: 360
 
       thermal:
-        rth_jf_K_per_W:
-          igbt: 0.12
-          diode: 0.17
+        # Datasheet "RthJF: IGBT" and "RthJF: Diode"
+        rth_jf_igbt_k_per_w: 0.10
+        rth_jf_diode_k_per_w: 0.14
+        notes: "RthJF depends on coolant flow; datasheet uses 50/50 water/EG reference."
 
-    modeling_hints:
-      diode_rr_included_in_eon: false
+    dc_link:
+      voltage_class_v: 450
+      capacitors:
+        - type: film
+          manufacturer: Panasonic
+          capacitance_uF_total: 1074
+          voltage_v: 450
+          notes: "Leaf Gen2 smoothing film capacitor value (user target / teardown reference)."
+
+  # ---------------------------------------------------------------------------
+  # VECTRIX VX-1 / GENERIC PM300 power brick (IPM module)
+  # ---------------------------------------------------------------------------
+  - id: vectrix_pm300cla060
+    display_name: "Vectrix / PM300CLA060 (600V 300A IPM)"
+    topology: three_phase_2level_ipm
+    inverter:
+      switches_total: 6
+      parallel_devices_per_switch: 1
+      notes: "This is a 3-phase IPM (contains 6 switches + drivers/protection)."
+
+    device:
+      category: ipm_igbt_sixpack
+      manufacturer: Mitsubishi
+      part_number: PM300CLA060
+      ratings:
+        vces_max_v: 600
+        ic_nominal_a: 300
+        ic_peak_a: 600
+        tj_range_c: [-20, 150]
+
+      conduction:
+        vce_sat:
+          ic_a: 300
+          # Datasheet headline + electrical characteristics limit table
+          tj_points:
+            - tj_c: 25
+              max_v: 1.6
+            - tj_c: 125
+              typ_v: 1.5
+        diode_vf:
+          if_a: 300
+          max_v: 2.2
+
+      switching:
+        times_us:
+          # Datasheet gives switching times (not energies)
+          conditions:
+            vcc_v: 300
+            ic_a: 300
+            tj_c: 125
+          ton_max_us: 0.5
+          toff_max_us: 1.2
+          trr_max_us: 1.0
+        notes: >
+          No Eon/Eoff table in this short datasheet; start by estimating E from times
+          or use digitized CSTBT curves from a closer family part.
+
+      thermal:
+        # Datasheet gives Rth(j-c) entries (per 1/6) with labels Q/F; keep as-is as a placeholder.
+        rth_jc_igbt_k_per_w_typ: 0.12
+        rth_jc_igbt_k_per_w_max: 0.19
+        rth_jc_diode_k_per_w_typ: 0.16
+        rth_jc_diode_k_per_w_max: 0.25
+        rth_cf_k_per_w_typ: 0.023
+        notes: "Interpretation of Q/F labels should be confirmed against Mitsubishi appnote."
+
+    dc_link:
+      capacitors:
+        - type: mlcc
+          manufacturer: Murata
+          part_numbers: ["7717471", "7205432"]  # user-provided markings
+          capacitance_uF_each: 80
+          voltage_v: 250
+          count: 4
+          notes: "user-provided: schematic indicates 80µF/250V each."
+
+  # ---------------------------------------------------------------------------
+  # BMW i3 placeholder (keep if you want a generic 650V module baseline)
+  # ---------------------------------------------------------------------------
+  - id: bmw_i3_generic650v_fs600r07a2e3_proxy
+    display_name: "BMW i3 / Generic 650V IGBT module (FS600R07A2E3 proxy)"
+    topology: three_phase_2level_module_placeholder
+    inverter:
+      switches_total: 6
+      parallel_devices_per_switch: 1
+      notes: "Proxy entry: replace with exact i3 module part + teardown-backed DC-link + gate-drive."
+
+    device:
+      category: igbt_module_proxy
+      manufacturer: Infineon
+      part_number: FS600R07A2E3
+      notes: "Use FS600R07A2E3 datasheet as a starting point for curves/thermal."
