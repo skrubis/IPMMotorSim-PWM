@@ -1,0 +1,108 @@
+name: Build & Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: ubuntu-latest
+            name: linux-x64
+          - os: macos-latest
+            name: macos
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.*"
+          modules: "qtcharts"
+          cache: true
+
+      - name: Configure (Release)
+        run: qt-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $staging = "dist/IPMMotorSim-windows-x64"
+          New-Item -ItemType Directory -Force $staging | Out-Null
+          Copy-Item "build/IPMMotorSim.exe" "$staging/" -Force
+          if (Test-Path "build/powerstages.yaml") { Copy-Item "build/powerstages.yaml" "$staging/" -Force }
+          if (Test-Path "build/params") { Copy-Item "build/params" "$staging/params" -Recurse -Force }
+          windeployqt --no-translations --release "$staging/IPMMotorSim.exe"
+          cmake -E tar cfv "dist/IPMMotorSim-windows-x64.zip" --format=zip "$staging"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="dist/IPMMotorSim-linux-x64"
+          mkdir -p "$staging"
+          cp "build/IPMMotorSim" "$staging/"
+          [ -f "build/powerstages.yaml" ] && cp "build/powerstages.yaml" "$staging/" || true
+          [ -d "build/params" ] && cp -R "build/params" "$staging/params" || true
+          chmod +x "$staging/IPMMotorSim"
+          cmake -E tar cfv "dist/IPMMotorSim-linux-x64.zip" --format=zip "$staging"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/IPMMotorSim.app"
+          if [ ! -d "$app" ]; then
+            echo "Expected $app to exist. Did CMake build an app bundle?"
+            exit 1
+          fi
+          macdeployqt "$app" -verbose=1
+          mkdir -p dist
+          cmake -E tar cfv "dist/IPMMotorSim-macos.zip" --format=zip "$app"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IPMMotorSim-${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/IPMMotorSim-*.zip

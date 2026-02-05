@@ -29,6 +29,28 @@ If CMake cannot find Qt, set `CMAKE_PREFIX_PATH` to your Qt install, for example
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.6.1/msvc2019_64"
 ```
 
+## Release CI (GitHub Actions)
+This repo includes a GitHub Actions workflow that builds and packages ZIP artifacts for:
+- Windows x64
+- Linux x64
+- macOS
+
+The workflow runs only when:
+- you manually start it (Actions -> “Build & Package” -> Run workflow), or
+- you push a git tag matching `v*` (for example `v1.0.0`), which also creates/updates a GitHub Release with the ZIPs attached.
+
+Create a release tag:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Output artifacts are named like:
+- `IPMMotorSim-windows-x64.zip`
+- `IPMMotorSim-linux-x64.zip`
+- `IPMMotorSim-macos.zip`
+
 ## qmake (legacy)
 Qt Creator can still open `IPMMotorSim/IPMMotorSim.pro` directly.
 
