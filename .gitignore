@@ -37,6 +37,8 @@
 /logs/
 /tasks.md
 /tasks2.md
+/CI/
+/IPMMotorSim/CI/
 # Qt Creator/CMake user files
 *.user
 CMakeCache.txt

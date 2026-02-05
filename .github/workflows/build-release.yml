@@ -37,7 +37,18 @@ jobs:
           modules: "qtcharts"
           cache: true
 
-      - name: Configure (Release)
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure (Release) (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          qt-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+
+      - name: Configure (Release) (non-Windows)
+        if: runner.os != 'Windows'
         run: qt-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -74,9 +85,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="build/IPMMotorSim.app"
-          if [ ! -d "$app" ]; then
-            echo "Expected $app to exist. Did CMake build an app bundle?"
+          app="$(find build -maxdepth 2 -name 'IPMMotorSim.app' -print -quit)"
+          if [ -z "$app" ] || [ ! -d "$app" ]; then
+            echo "Expected IPMMotorSim.app to exist under build/. Did CMake build an app bundle?"
             exit 1
           fi
           macdeployqt "$app" -verbose=1
