@@ -24,10 +24,13 @@
 #include <QHash>
 #include <QVector>
 #include <QStringList>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "datagraph.h"
 #include "idiqgraph.h"
 #include "sim/motor_plant.h"
 #include "sim/power_module.h"
+#include "sim/sim_runner.h"
 
 
 
@@ -35,11 +38,19 @@ namespace Ui {
 class MainWindow;
 }
 
+namespace sim {
+struct SweepContext;
+}
+
+class RunOrchestrator;
+class ScenarioWindow;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 private:
+    friend class ScenarioWindow;
     struct PowerStagePreset
     {
         QString key;
@@ -102,6 +113,9 @@ private:
     IdIqGraph *idigGraph;
     DataGraph *powerGraph;
     sim::MotorPlant *motor;
+    sim::SimRunner m_simRunner;
+    RunOrchestrator* m_runOrchestrator = nullptr;
+    ScenarioWindow* m_scenarioWindow = nullptr;
     double m_time;
     uint32_t m_old_time;
     uint32_t m_old_ms_time;
@@ -126,6 +140,7 @@ private:
 
     double m_runTime;
     int m_lastTorqueDemand;
+    bool m_suppressScenarioApply = false;
     QVector<PowerStagePreset> m_powerStagePresets;
     QHash<QString, int> m_powerStagePresetByKey;
 
@@ -247,10 +262,32 @@ private slots:
 
     void on_openInverterPreset_currentIndexChanged(int index);
     void on_browseOpenInverterPreset_clicked();
+    void on_pbSweepLoad_clicked();
+    void on_pbSweepSave_clicked();
+    void on_pbSweepFromUi_clicked();
+    void on_pbRunSweep_clicked();
+    void on_pbMakeLut_clicked();
+    void on_pbCycleEval_clicked();
+    void on_pbMakeReport_clicked();
+    void on_scenarioPreset_currentIndexChanged(int index);
+    void on_pbRunScenario_clicked();
+    void on_pbCancelRun_clicked();
+    void on_pbOpenOutDir_clicked();
+    void on_pbOpenArtifact_clicked();
 
 private:
     Ui::MainWindow *ui;
     void closeEvent(QCloseEvent *bar);
+    QJsonObject buildSweepJsonFromUi() const;
+    bool parseSweepJsonText(QJsonDocument* doc, QString* error) const;
+    bool saveSweepJsonToPath(const QString& path, QString* error) const;
+    bool loadSweepJsonFromPath(const QString& path, QString* error);
+    bool buildSweepContext(sim::SweepContext* ctx, sim::PowerModuleParams* moduleParams, QString* error);
+    QJsonObject buildScenarioPresetJson(const QString& scenario) const;
+    void applyScenarioPreset(const QString& scenario);
+    void appendRunLog(const QString& text);
+    void refreshArtifacts(const QString& outDir);
+    void setRunUiEnabled(bool enabled);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;

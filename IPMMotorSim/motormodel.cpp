@@ -62,6 +62,9 @@ void MotorModel::Step(double Va, double Vb, double Vc)
     double Valpha = Va;
     double Vbeta = ((Va+(2.0*Vb))/qSqrt(3.0));
 
+    if (m_operatingMode == OperatingMode::ClampedSpeed)
+        setMotorFrequency(m_clampedFrequency);
+
     double elecAngle = fmod(m_Position,360.0);
 
     m_Vd = (Valpha * qCos(qDegreesToRadians(m_Position))) + (Vbeta * qSin(qDegreesToRadians(elecAngle)));
@@ -97,18 +100,21 @@ void MotorModel::Step(double Va, double Vb, double Vc)
 
     m_Torque = (3.0/2.0) * m_Poles * ((m_FluxLink * m_Iq) + ((m_Ld - m_Lq) * m_Id * m_Iq));
 
-    //This is a very simple model just lumping everything together in a single vehicle mass
-    //A better approach would be to have a fast and slow calculation
-    //The slow calculation is pretty much as below and based on car mass
-    //The fast calculation kicks in on direction changes produces a position calculated just from the inertia for the motor and geartrain.  The
-    //position delta from this component would be limited by a configurable driveshaft angular play parameter.
-    //If added this would allow driveline shunt to be simulated by the model
-    double wheelTorque = (m_Torque * m_Ratio) / m_WheelSize;//m_Wheelsize is radius (in m) to give N here
-    double gradientForce = -(qSin(qAtan(m_RoadGradient))*m_Mass*9.81);
-    double accelForce = wheelTorque + gradientForce;
-    double accel = accelForce/m_Mass;
-    m_Speed = m_Speed + (accel * m_Timestep);
-    m_Frequency = (m_Speed / (2.0 * M_PI * m_WheelSize)) * m_Ratio;
+    if (m_operatingMode == OperatingMode::Dynamic)
+    {
+        //This is a very simple model just lumping everything together in a single vehicle mass
+        //A better approach would be to have a fast and slow calculation
+        //The slow calculation is pretty much as below and based on car mass
+        //The fast calculation kicks in on direction changes produces a position calculated just from the inertia for the motor and geartrain.  The
+        //position delta from this component would be limited by a configurable driveshaft angular play parameter.
+        //If added this would allow driveline shunt to be simulated by the model
+        double wheelTorque = (m_Torque * m_Ratio) / m_WheelSize;//m_Wheelsize is radius (in m) to give N here
+        double gradientForce = -(qSin(qAtan(m_RoadGradient))*m_Mass*9.81);
+        double accelForce = wheelTorque + gradientForce;
+        double accel = accelForce/m_Mass;
+        m_Speed = m_Speed + (accel * m_Timestep);
+        m_Frequency = (m_Speed / (2.0 * M_PI * m_WheelSize)) * m_Ratio;
+    }
     m_Power = 2.0 * M_PI * m_Frequency * m_Torque;
 
     double posDelta = m_Frequency * m_Timestep * (360.0 * m_Poles);

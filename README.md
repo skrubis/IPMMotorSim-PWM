@@ -1,5 +1,5 @@
 # IPMMotorSim
-This project is an IPM Motor simulator intended to be uses with the Huebner inverter project, in particular the stm32-sine FOC firmware build.
+This project is an IPM Motor simulator intended to be used with the Huebner inverter project, in particular the stm32-sine FOC firmware build.
 
 # Aims
 The main aim of this project is to allow testing and development of the motor control sections of the inverter firmware in a safe reproducible environment.
@@ -21,13 +21,81 @@ Qt has moved to CMake-based builds, so this is the recommended path.
 ```
 cmake -S . -B build
 cmake --build build --config Release
+ctest --test-dir build -C Release -R unit_tests --output-on-failure
 ```
+
+### Windows: Qt DLLs (windeployqt)
+On Windows, the built executables need Qt runtime DLLs next to them (or the Qt `bin` directory must be on `PATH`).
+The CMake build will automatically run `windeployqt` (if it can find it via your Qt install / `PATH`) after linking:
+- `IPMMotorSim` (GUI)
+- `unit_tests`
+- `simtool`
+
+If `windeployqt` is not found at configure time, builds still succeed, but running `unit_tests` via `ctest` may fail
+with `0xc0000135` (missing DLL).
 
 If CMake cannot find Qt, set `CMAKE_PREFIX_PATH` to your Qt install, for example:
 
 ```
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.6.1/msvc2019_64"
 ```
+
+## CLI + GUI Pipeline Tooling
+This fork adds a reproducible sweep/LUT/cycle/report workflow around the core simulator.
+
+CLI (`simtool`):
+- Runs sweeps headlessly and writes outputs to an `out/` directory.
+- Builds LUTs from sweep results (`lut.json` + `lut_pwm_strategy.h`).
+- Invokes Python stages for cycle evaluation and PDF report generation.
+- Writes `run_manifest.json` for reproducibility (timestamp, config hash, presets/module params, constraints, strategy list, phi source, tool versions, optional git hash).
+
+GUI:
+- Adds a "Run Scenario" orchestrator for long runs (background execution + cancel).
+- Scenario presets + JSON editor (can generate a baseline sweep JSON "From UI" then edit).
+- Live progress/logging + artifact browser (summary/LUT/cycle/report outputs).
+
+Sweep outputs:
+- AUTO strategies export observability during the MEASURE window (mode histogram, primary mode/frac, switch count; AUTO_PRED predicted savings stats when available).
+
+LUT export hardening:
+- `lut.json` includes an explicit `mode_id_map` and LUT header emits explicit `LUT_MODE_*` IDs (not dependent on enum order).
+- LUT metadata includes bin axes, `phi_source`, constraints (canonical keys), `min_pulse_s_effective`, regret metrics, and (if present) a link to `run_manifest.json`.
+- `lut_runtime_params.h` includes recommended runtime wrapper defaults (dwell, hysteresis, sector lock, min benefit).
+
+How-to: see `docs/howto_cli_and_gui_runs.md`.
+
+Quick CLI (example):
+
+```
+cmake -S . -B build
+cmake --build build --config Release
+
+./build/Release/simtool --sweep configs/map_coarse.json --out out/run1
+./build/Release/simtool --make-lut --in out/run1
+./build/Release/simtool --cycle-eval --in out/run1 --cycle cycles/ece_like_iq.csv
+./build/Release/simtool --make-report --in out/run1 --out out/run1/report.pdf
+```
+
+Example configs (configs/):
+- `configs/freq_sweep_quick.json` (fixed-point PWM frequency sweep)
+- `configs/map_coarse.json` (coarse map for LUT)
+- `configs/map_highspeed_refine.json` (optional high-speed refinement)
+
+Example cycles (cycles/):
+- `cycles/ece_like_iq.csv`
+- `cycles/eudc_like_iq.csv`
+
+Note: supported PWM carrier frequencies are **4400 / 8800 / 17600 Hz**; configs and UI validate this.
+
+Default motor/vehicle parameters (fresh install):
+- Vehicle mass: 500 kg
+- Wheel radius: 0.3 m
+- Gear ratio: 6
+- Vdc: 350 V
+- Lq/Ld: 4/2 mH, Rs: 0.075 ohm, Flux linkage: 200 mWeber, Poles: 4
+- Loop frequency: 8800 Hz, Sampling point: 50%, SyncDel: 16 us
+
+Note: the GUI persists most fields via QSettings; if you have previous values saved, they override UI defaults.
 
 ## Release CI (GitHub Actions)
 This repo includes a GitHub Actions workflow that builds and packages ZIP artifacts for:
@@ -46,10 +114,10 @@ After extracting:
 - **Linux**: run `./IPMMotorSim`
 - **macOS**: run `IPMMotorSim.app` (you may need to right-click -> Open the first time due to Gatekeeper)
 
-The ZIPs include `powerstages.yaml` and (if present) the `params/` presets next to the executable/app so the dropdowns work out of the box.
+The ZIPs include `powerstages.yml` and (if present) the `params/` presets next to the executable/app so the dropdowns work out of the box.
 
 The workflow runs only when:
-- you manually start it (Actions -> “Build & Package” -> Run workflow), or
+- you manually start it (Actions -> "Build & Package" -> Run workflow), or
 - you push a git tag matching `v*` (for example `v1.0.0`), which also creates/updates a GitHub Release with the ZIPs attached.
 
 Create a release tag:
@@ -97,6 +165,10 @@ If **PWM ripple (loss)** is enabled (Power Stage -> Basics), the CSV includes ad
 - Inverter losses window with per-device loss breakdown and averaged summary strip.
 - Optional intra-PWM current ripple approximation for loss inputs (simple RL + BEMF), with ripple/torque-ripple diagnostics.
 - CSV logging includes modulation diagnostics, losses, ripple metrics, and basic thermal estimates.
+- Sweep/LUT automation tooling:
+  - headless CLI `simtool`
+  - GUI "Run Scenario" orchestrator (background, cancel, progress/log, artifacts)
+  - Python cycle eval + PDF report pipeline (see `docs/howto_cli_and_gui_runs.md`)
 
 # PWM/Loss Model Shortfalls (current limitations)
 - Losses now use an event-level PWM timeline (per edge / deadtime window) but phase currents are still held constant over each PWM period.

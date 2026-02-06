@@ -22,7 +22,9 @@ enum class ModulationMode
     DPWMMIN,
     DPWMMAX,
     DPWM0,
-    DPWM1
+    DPWM1,
+    DPWM2,
+    DPWM3
 };
 
 struct ModulatorDiag

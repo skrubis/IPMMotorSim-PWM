@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>660</width>
-    <height>980</height>
+    <height>1550</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -55,7 +55,7 @@
          <bool>true</bool>
         </property>
         <property name="text">
-         <string>1300</string>
+         <string>500</string>
         </property>
        </widget>
       </item>
@@ -72,7 +72,7 @@
          <bool>true</bool>
         </property>
         <property name="text">
-         <string>0.28</string>
+         <string>0.3</string>
         </property>
        </widget>
       </item>
@@ -89,7 +89,7 @@
          <bool>true</bool>
         </property>
         <property name="text">
-         <string>6.859</string>
+         <string>6</string>
         </property>
        </widget>
       </item>
@@ -106,7 +106,7 @@
          <bool>true</bool>
         </property>
         <property name="text">
-         <string>360</string>
+         <string>350</string>
         </property>
        </widget>
       </item>
@@ -123,7 +123,7 @@
          <bool>true</bool>
         </property>
         <property name="text">
-         <string>6</string>
+         <string>4</string>
         </property>
        </widget>
       </item>
@@ -479,6 +479,16 @@
         <item>
          <property name="text">
           <string>DPWM1</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWM2</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>DPWM3</string>
          </property>
         </item>
        </widget>
@@ -1455,9 +1465,231 @@
        </widget>
       </item>
      </layout>
-    </widget>
    </widget>
   </widget>
+  <widget class="QGroupBox" name="groupBox_sweep">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>980</y>
+      <width>641</width>
+      <height>520</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>Sweeps / LUT / Report</string>
+    </property>
+    <widget class="QWidget" name="gridLayoutWidget_sweep">
+     <property name="geometry">
+      <rect>
+       <x>0</x>
+       <y>20</y>
+       <width>641</width>
+       <height>500</height>
+      </rect>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_sweep">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelScenario">
+        <property name="text">
+         <string>Scenario</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1" colspan="3">
+       <widget class="QComboBox" name="scenarioPreset"/>
+      </item>
+      <item row="0" column="4">
+       <widget class="QPushButton" name="pbRunScenario">
+        <property name="text">
+         <string>Run</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="5">
+       <widget class="QPushButton" name="pbCancelRun">
+        <property name="text">
+         <string>Cancel</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelSweepConfigPath">
+        <property name="text">
+         <string>Sweep JSON</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1" colspan="2">
+       <widget class="QLineEdit" name="sweepConfigPath"/>
+      </item>
+      <item row="1" column="3">
+       <widget class="QPushButton" name="pbSweepLoad">
+        <property name="text">
+         <string>Load</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="4">
+       <widget class="QPushButton" name="pbSweepSave">
+        <property name="text">
+         <string>Save</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="5">
+       <widget class="QPushButton" name="pbSweepFromUi">
+        <property name="text">
+         <string>From UI</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelSweepOutDir">
+        <property name="text">
+         <string>Output Dir</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QLineEdit" name="sweepOutDir">
+        <property name="text">
+         <string>sweep_out</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="3">
+       <widget class="QPushButton" name="pbRunSweep">
+        <property name="text">
+         <string>Run Sweep</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="4">
+       <widget class="QPushButton" name="pbMakeLut">
+        <property name="text">
+         <string>Make LUT</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="5">
+       <widget class="QPushButton" name="pbMakeReport">
+        <property name="text">
+         <string>Make Report</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelCycleCsv">
+        <property name="text">
+         <string>Cycle CSV</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1" colspan="2">
+       <widget class="QLineEdit" name="cycleCsvPath"/>
+      </item>
+      <item row="3" column="3">
+       <widget class="QPushButton" name="pbCycleEval">
+        <property name="text">
+         <string>Cycle Eval</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="labelPythonExe">
+        <property name="text">
+         <string>Python</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1" colspan="5">
+       <widget class="QLineEdit" name="pythonExePath">
+        <property name="text">
+         <string>python</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="labelSweepJson">
+        <property name="text">
+         <string>JSON</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1" colspan="5">
+       <widget class="QPlainTextEdit" name="sweepConfigJson"/>
+      </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="labelStage">
+        <property name="text">
+         <string>Stage</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="1" colspan="5">
+       <widget class="QLabel" name="runStageLabel">
+        <property name="text">
+         <string>Idle</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
+       <widget class="QLabel" name="labelProgress">
+        <property name="text">
+         <string>Progress</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1" colspan="5">
+       <widget class="QProgressBar" name="runProgress">
+        <property name="value">
+         <number>0</number>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0">
+       <widget class="QLabel" name="labelRunLog">
+        <property name="text">
+         <string>Log</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="1" colspan="5">
+       <widget class="QPlainTextEdit" name="runLog">
+        <property name="readOnly">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="9" column="0">
+       <widget class="QLabel" name="labelArtifacts">
+        <property name="text">
+         <string>Artifacts</string>
+        </property>
+       </widget>
+      </item>
+      <item row="9" column="1" colspan="3">
+       <widget class="QListWidget" name="artifactList"/>
+      </item>
+      <item row="9" column="4">
+       <widget class="QPushButton" name="pbOpenOutDir">
+        <property name="text">
+         <string>Open Dir</string>
+        </property>
+       </widget>
+      </item>
+      <item row="9" column="5">
+       <widget class="QPushButton" name="pbOpenArtifact">
+        <property name="text">
+         <string>Open</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </widget>
+ </widget>
   <widget class="QMenuBar" name="menuBar">
    <property name="geometry">
     <rect>

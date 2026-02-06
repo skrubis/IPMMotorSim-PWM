@@ -37,7 +37,18 @@
 #include <QLabel>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonParseError>
+#include <QMessageBox>
+#include <QProcess>
+#include <QTemporaryFile>
+
+#include "sim/lut/lut_builder.h"
+#include "sim/sweep/sweep_config.h"
+#include "sim/sweep/sweep_runner.h"
+#include "sim/util/process_utils.h"
+#include "run_orchestrator.h"
+#include "scenario_window.h"
 #include <QMessageBox>
 #include <QLocale>
 #include <QRandomGenerator>
@@ -47,9 +58,14 @@
 #include <QSet>
 #include <QTextStream>
 #include <QToolTip>
+#include <QTextCursor>
+#include <QListWidgetItem>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QApplication>
 #include <QCursor>
 #include <QGuiApplication>
+#include <QMenuBar>
 #include <QScreen>
 #include <limits>
 #include "pwmgeneration.h"
@@ -547,6 +563,27 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->setupUi(this);
     setAttribute(Qt::WA_AlwaysShowToolTips, true);
 
+    // Scenario/sweep tooling is now hosted in a separate window so the main UI stays usable on smaller screens.
+    if (ui->groupBox_sweep)
+        ui->groupBox_sweep->hide();
+
+    if (menuBar())
+    {
+        QMenu* tools = menuBar()->addMenu("Tools");
+        QAction* openScenario = tools->addAction("Sweeps / LUT / Report...");
+        connect(openScenario, &QAction::triggered, this, [this]()
+        {
+            if (!m_scenarioWindow)
+            {
+                m_scenarioWindow = new ScenarioWindow(this, this);
+                connect(m_scenarioWindow, &QObject::destroyed, this, [this]() { m_scenarioWindow = nullptr; });
+            }
+            m_scenarioWindow->show();
+            m_scenarioWindow->raise();
+            m_scenarioWindow->activateWindow();
+        });
+    }
+
     // Explicitly connect signals for the params preset UI (avoid reliance on connectSlotsByName() with overloaded signals).
     if (ui->openInverterPreset)
     {
@@ -583,7 +620,7 @@ MainWindow::MainWindow(QWidget *parent) :
         const QRect current = frameGeometry();
         if(!available.intersects(current) || width() <= 0 || height() <= 0)
         {
-            resize(660, 980);
+            resize(660, 1200);
             move(available.center() - rect().center());
         }
     }
@@ -629,6 +666,14 @@ MainWindow::MainWindow(QWidget *parent) :
         if(settings.contains(ui->ThrotRamps->objectName())) ui->ThrotRamps->setChecked(settings.value(ui->ThrotRamps->objectName()).toBool());
         if(settings.contains(ui->cb_Efficiency->objectName())) ui->cb_Efficiency->setChecked(settings.value(ui->cb_Efficiency->objectName()).toBool());
         if(settings.contains(ui->cb_LogCsv->objectName())) ui->cb_LogCsv->setChecked(settings.value(ui->cb_LogCsv->objectName()).toBool());
+        if (ui->sweepConfigPath && settings.contains(ui->sweepConfigPath->objectName()))
+            ui->sweepConfigPath->setText(settings.value(ui->sweepConfigPath->objectName(), QString()).toString());
+        if (ui->sweepOutDir && settings.contains(ui->sweepOutDir->objectName()))
+            ui->sweepOutDir->setText(settings.value(ui->sweepOutDir->objectName(), QString()).toString());
+        if (ui->cycleCsvPath && settings.contains(ui->cycleCsvPath->objectName()))
+            ui->cycleCsvPath->setText(settings.value(ui->cycleCsvPath->objectName(), QString()).toString());
+        if (ui->pythonExePath && settings.contains(ui->pythonExePath->objectName()))
+            ui->pythonExePath->setText(settings.value(ui->pythonExePath->objectName(), QString()).toString());
         if(settings.contains(ui->cb_PwmZeroSeq->objectName())) ui->cb_PwmZeroSeq->setChecked(settings.value(ui->cb_PwmZeroSeq->objectName()).toBool());
         if(settings.contains(ui->cb_PwmClamp->objectName())) ui->cb_PwmClamp->setChecked(settings.value(ui->cb_PwmClamp->objectName()).toBool());
         if(settings.contains(ui->cb_PwmTiming->objectName())) ui->cb_PwmTiming->setChecked(settings.value(ui->cb_PwmTiming->objectName()).toBool());
@@ -637,6 +682,19 @@ MainWindow::MainWindow(QWidget *parent) :
         if(settings.contains(ui->cb_Losses->objectName())) ui->cb_Losses->setChecked(settings.value(ui->cb_Losses->objectName()).toBool());
         if(settings.contains(ui->modulationMode->objectName()))
             ui->modulationMode->setCurrentIndex(settings.value(ui->modulationMode->objectName()).toInt());
+    }
+
+    if (ui->scenarioPreset)
+    {
+        const QString scenario = settings.value("sweep/scenarioPreset").toString();
+        if (!scenario.isEmpty())
+        {
+            m_suppressScenarioApply = true;
+            const int idx = ui->scenarioPreset->findText(scenario);
+            if (idx >= 0)
+                ui->scenarioPreset->setCurrentIndex(idx);
+            m_suppressScenarioApply = false;
+        }
     }
 
     ui->startRpm->setValidator(new QIntValidator(-20000, 20000, ui->startRpm));
@@ -890,6 +948,18 @@ MainWindow::MainWindow(QWidget *parent) :
     m_oldVc = 0;
 
     m_lastTorqueDemand = 0;
+    {
+        sim::SimInit init{};
+        init.motor = motor;
+        init.time_s = m_time;
+        init.old_va = m_oldVa;
+        init.old_vb = m_oldVb;
+        init.old_vc = m_oldVc;
+        init.old_time_10ms = m_old_time;
+        init.old_time_ms = m_old_ms_time;
+        init.last_torque_demand = m_lastTorqueDemand;
+        m_simRunner.Reset(init);
+    }
 
     motorGraph->setWindowTitle("Motor Currents");
     motorGraph->setAxisText("", "Amps (A)", "Ripple (A)");
@@ -1080,6 +1150,7 @@ MainWindow::MainWindow(QWidget *parent) :
     //run for 1sec to complete motor init
     runFor(8789);
     on_pbRestart_clicked();
+    setRunUiEnabled(true);
 }
 
 MainWindow::~MainWindow()
@@ -1154,6 +1225,16 @@ void MainWindow::closeEvent(QCloseEvent *event)
     settings.setValue(ui->cb_PhaseVolts->objectName(), ui->cb_PhaseVolts->isChecked());
     settings.setValue(ui->rb_OP_Amps->objectName(), ui->rb_OP_Amps->isChecked());
     settings.setValue(ui->cb_LogCsv->objectName(), ui->cb_LogCsv->isChecked());
+    if (ui->sweepConfigPath)
+        settings.setValue(ui->sweepConfigPath->objectName(), ui->sweepConfigPath->text());
+    if (ui->sweepOutDir)
+        settings.setValue(ui->sweepOutDir->objectName(), ui->sweepOutDir->text());
+    if (ui->cycleCsvPath)
+        settings.setValue(ui->cycleCsvPath->objectName(), ui->cycleCsvPath->text());
+    if (ui->pythonExePath)
+        settings.setValue(ui->pythonExePath->objectName(), ui->pythonExePath->text());
+    if (ui->scenarioPreset)
+        settings.setValue("sweep/scenarioPreset", ui->scenarioPreset->currentText());
 
     motorGraph->saveWinState();
     simulationGraph->saveWinState();
@@ -2602,9 +2683,6 @@ void MainWindow::runFor(int num_steps)
     double Vb_cmd = 0;
     double Vc_cmd = 0;
 
-    sim::Controller controller;
-    sim::Modulator modulator;
-    sim::InverterSwitchingModel inverter;
     sim::ModulationMode modMode = sim::ModulationMode::Firmware;
     const int modIndex = ui->modulationMode->currentIndex();
     switch(modIndex)
@@ -2614,6 +2692,8 @@ void MainWindow::runFor(int num_steps)
         case 3: modMode = sim::ModulationMode::DPWMMAX; break;
         case 4: modMode = sim::ModulationMode::DPWM0; break;
         case 5: modMode = sim::ModulationMode::DPWM1; break;
+        case 6: modMode = sim::ModulationMode::DPWM2; break;
+        case 7: modMode = sim::ModulationMode::DPWM3; break;
         default: modMode = sim::ModulationMode::Firmware; break;
     }
     const QString modModeStr = ui->modulationMode->currentText();
@@ -2666,9 +2746,6 @@ void MainWindow::runFor(int num_steps)
     moduleParams.irr_A = ParseCurvePoints<3>(ui->irrPoints->toPlainText(), moduleParams.irr_A);
     moduleParams.trr_us = ParseCurvePoints<3>(ui->trrPoints->toPlainText(), moduleParams.trr_us);
 
-    inverter.SetModuleParams(moduleParams);
-    inverter.ResetThermals(invParams.sink_temp_C);
-
     if(num_steps<0)
         return;
 
@@ -2678,6 +2755,39 @@ void MainWindow::runFor(int num_steps)
         app::Breadcrumb("runFor: motor is null");
         return;
     }
+
+    sim::SimInit simInit{};
+    simInit.motor = motor;
+    simInit.time_s = m_time;
+    simInit.old_va = m_oldVa;
+    simInit.old_vb = m_oldVb;
+    simInit.old_vc = m_oldVc;
+    simInit.old_time_10ms = m_old_time;
+    simInit.old_time_ms = m_old_ms_time;
+    simInit.last_torque_demand = m_lastTorqueDemand;
+    m_simRunner.Reset(simInit);
+
+    sim::SimInputs simInputs{};
+    simInputs.timestep_s = m_timestep;
+    simInputs.vdc_V = m_Vdc;
+    simInputs.torque_demand_pct = ui->torqueDemand ? ui->torqueDemand->text().toInt() : 0;
+    simInputs.throttle_ramps = ui->ThrotRamps && ui->ThrotRamps->isChecked();
+    simInputs.add_noise = ui->AddNoise && ui->AddNoise->isChecked();
+    simInputs.noise_amp = ui->NoiseAmp ? ui->NoiseAmp->text().toDouble() : 0.0;
+    if (simInputs.add_noise)
+    {
+        simInputs.noise_fn = [](double amp) -> double
+        {
+            if (amp <= 0.0)
+                return 0.0;
+            return QRandomGenerator::global()->bounded(amp) - (amp / 2.0);
+        };
+    }
+    simInputs.extra_cycle_delay = ui->ExtraCycleDelay && ui->ExtraCycleDelay->isChecked();
+    simInputs.mod_mode = modMode;
+    simInputs.mod_blend = modBlend;
+    simInputs.inv_params = invParams;
+    simInputs.module_params = moduleParams;
 
     if (invParams.integrate_currents_in_pwm)
     {
@@ -2794,147 +2904,58 @@ void MainWindow::runFor(int num_steps)
         }
     }
 
-    //PwmGeneration::SetTorquePercent(ui->torqueDemand->text().toFloat());
-    for(int i = 0;i<num_steps; i++)
+    sim::RunHooks hooks;
+    hooks.on_step = [&](const sim::StepSnapshot& snap)
     {
-        if ((i & 1023) == 0)
-            app::Breadcrumb(QString("runFor: step=%1 time=%2").arg(i).arg(m_time, 0, 'g', 9));
+        if ((snap.step_index & 1023) == 0)
+            app::Breadcrumb(QString("runFor: step=%1 time=%2").arg(snap.step_index).arg(snap.time_s, 0, 'g', 9));
 
-        //routines that need calling every 10ms
-        if((uint32_t)(m_time*100) != m_old_time)
+        if (!std::isfinite(snap.controller.vd_ctrl) || !std::isfinite(snap.controller.vq_ctrl) ||
+            !std::isfinite(snap.motor.elec_pos_deg))
         {
-            m_old_time = (uint32_t)(m_time*100);
-            Encoder::UpdateRotorFrequency(100);
-
-            int requestedTorque = ui->torqueDemand->text().toInt() * 100;
-            if(ui->ThrotRamps->isChecked())
-            {
-                //ramps set at 5% above 0 and 0.5% below
-                if(m_lastTorqueDemand != requestedTorque)
-                {
-                    if(requestedTorque > m_lastTorqueDemand)
-                        requestedTorque = RAMPUP(m_lastTorqueDemand, requestedTorque, ((m_lastTorqueDemand>=0)?500:50));
-                    else
-                        requestedTorque = RAMPDOWN(m_lastTorqueDemand, requestedTorque, ((m_lastTorqueDemand>=0)?500:50));
-                    m_lastTorqueDemand = requestedTorque;
-                }
-                controller.SetTorquePercent(((float)(requestedTorque+50))/100);
-            }
-            else
-                controller.SetTorquePercent(ui->torqueDemand->text().toFloat());
+            qWarning().noquote() << QString("runFor: non-finite ctrl values at step=%1 time=%2 theta_deg=%3 vd=%4 vq=%5")
+                                        .arg(snap.step_index)
+                                        .arg(snap.time_s, 0, 'g', 9)
+                                        .arg(snap.motor.elec_pos_deg, 0, 'g', 9)
+                                        .arg(snap.controller.vd_ctrl, 0, 'g', 9)
+                                        .arg(snap.controller.vq_ctrl, 0, 'g', 9);
         }
 
-        //routines that need calling every ms
-        if((uint32_t)(m_time*1000) != m_old_ms_time)
+        if (!std::isfinite(snap.motor.ia_samp) || !std::isfinite(snap.motor.ib_samp) || !std::isfinite(snap.motor.ic_samp))
         {
-            m_old_ms_time = (uint32_t)(m_time*100);
-            //not used at the moment but left in for future use
-        }        
-
-        controller.SetRotorAngle((uint16_t)((motor->getElecPosition()*TWO_PI_CONT)/360.0));
-        bool pwmEnabled = controller.PwmEnabled();
-        double il1_input = 0;
-        double il2_input = 0;
-        if(pwmEnabled)
-        {
-            il1_input = (Param::GetFloat(Param::il1gain)*motor->getIaSamp());
-            il2_input = (Param::GetFloat(Param::il2gain)*motor->getIbSamp());
+            qWarning().noquote() << QString("runFor: non-finite phase currents at step=%1 time=%2 ia=%3 ib=%4 ic=%5")
+                                        .arg(snap.step_index)
+                                        .arg(snap.time_s, 0, 'g', 9)
+                                        .arg(snap.motor.ia_samp, 0, 'g', 9)
+                                        .arg(snap.motor.ib_samp, 0, 'g', 9)
+                                        .arg(snap.motor.ic_samp, 0, 'g', 9);
         }
 
-        if(ui->AddNoise->isChecked())
-        {
-            double noise = ui->NoiseAmp->text().toDouble();
-            il1_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
-            il2_input += QRandomGenerator::global()->bounded(noise) - (noise/2);
-        }
+        Va_cmd = snap.voltages_cmd.a;
+        Vb_cmd = snap.voltages_cmd.b;
+        Vc_cmd = snap.voltages_cmd.c;
 
-        controller.SetCurrentInputs(il1_input, il2_input);
-        controller.Run();
-
-        pwmEnabled = controller.PwmEnabled();
-        sim::DutyCycles duty;
-        sim::ModulatorDiag modDiag{};
-        sim::PhaseVoltages voltages;
-        sim::LossBreakdown invLoss{};
-        sim::ThermalState invThermal{};
-        sim::PwmRippleDiag invRipple{};
-        const sim::PhaseCurrents phaseCurrents{
-            motor->getIaSamp(),
-            motor->getIbSamp(),
-            motor->getIcSamp()
-        };
-        if(!pwmEnabled) //needed to allow OpenInverter initialisation to complete
-        {
-            voltages = {};
-        }
-        else
-        {
-            const double theta = qDegreesToRadians(motor->getElecPosition());
-            const double vd_ctrl = controller.UdVolts(m_Vdc);
-            const double vq_ctrl = controller.UqVolts(m_Vdc);
-            if (!std::isfinite(theta) || !std::isfinite(vd_ctrl) || !std::isfinite(vq_ctrl))
-            {
-                qWarning().noquote() << QString("runFor: non-finite ctrl values at step=%1 time=%2 theta=%3 vd=%4 vq=%5")
-                                            .arg(i)
-                                            .arg(m_time, 0, 'g', 9)
-                                            .arg(theta, 0, 'g', 9)
-                                            .arg(vd_ctrl, 0, 'g', 9)
-                                            .arg(vq_ctrl, 0, 'g', 9);
-            }
-            const double v_alpha = (vd_ctrl * qCos(theta)) - (vq_ctrl * qSin(theta));
-            const double v_beta = (vd_ctrl * qSin(theta)) + (vq_ctrl * qCos(theta));
-
-            if (invParams.integrate_currents_in_pwm)
-            {
-                invParams.elec_angle_rad = theta;
-                constexpr double sqrt3 = 1.7320508075688772;
-                const double vq_bemf = motor->getVq_bemf();
-                const double e_alpha = -vq_bemf * qSin(theta);
-                const double e_beta = vq_bemf * qCos(theta);
-                invParams.bemf_phase_ln_V.a = e_alpha;
-                invParams.bemf_phase_ln_V.b = (-0.5 * e_alpha) + ((sqrt3 / 2.0) * e_beta);
-                invParams.bemf_phase_ln_V.c = (-0.5 * e_alpha) - ((sqrt3 / 2.0) * e_beta);
-            }
-
-            if(modMode == sim::ModulationMode::Firmware)
-            {
-                duty = modulator.GetDutyCycles();
-                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal, &invRipple);
-                modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, sim::ModulationMode::SVPWM, modBlend, &modDiag);
-            }
-            else
-            {
-                duty = modulator.ComputeFromAlphaBeta(v_alpha, v_beta, m_Vdc, modMode, modBlend, &modDiag);
-                voltages = inverter.FromDuty(m_Vdc, duty, phaseCurrents, m_timestep, invParams, &invLoss, &invThermal, &invRipple);
-            }
-        }
-
-        Va = voltages.a;
-        Vb = voltages.b;
-        Vc = voltages.c;
-
-        Va_cmd = Va;
-        Vb_cmd = Vb;
-        Vc_cmd = Vc;
+        Va = snap.voltages_ln.a;
+        Vb = snap.voltages_ln.b;
+        Vc = snap.voltages_ln.c;
 
         if(ui->cb_Pwm->isChecked())
         {
-            listPwmA.append(QPointF(m_time, duty.a_norm));
-            listPwmB.append(QPointF(m_time, duty.b_norm));
-            listPwmC.append(QPointF(m_time, duty.c_norm));
-            const double dutyMin = std::min(duty.a_norm, std::min(duty.b_norm, duty.c_norm));
-            const double dutyMax = std::max(duty.a_norm, std::max(duty.b_norm, duty.c_norm));
-            listPwmMin.append(QPointF(m_time, dutyMin));
-            listPwmMax.append(QPointF(m_time, dutyMax));
-            double zeroSeq = modDiag.zero_seq;
-            listPwmZero.append(QPointF(m_time, zeroSeq));
+            listPwmA.append(QPointF(snap.time_s, snap.duty.a_norm));
+            listPwmB.append(QPointF(snap.time_s, snap.duty.b_norm));
+            listPwmC.append(QPointF(snap.time_s, snap.duty.c_norm));
+            const double dutyMin = std::min(snap.duty.a_norm, std::min(snap.duty.b_norm, snap.duty.c_norm));
+            const double dutyMax = std::max(snap.duty.a_norm, std::max(snap.duty.b_norm, snap.duty.c_norm));
+            listPwmMin.append(QPointF(snap.time_s, dutyMin));
+            listPwmMax.append(QPointF(snap.time_s, dutyMax));
+            listPwmZero.append(QPointF(snap.time_s, snap.mod_diag.zero_seq));
 
             double clampA = 0.0, clampB = 0.0, clampC = 0.0;
-            if(modDiag.clamp_leg >= 0)
+            if(snap.mod_diag.clamp_leg >= 0)
             {
-                if(modDiag.clamp_leg == 0) clampA = modDiag.clamp_polarity;
-                if(modDiag.clamp_leg == 1) clampB = modDiag.clamp_polarity;
-                if(modDiag.clamp_leg == 2) clampC = modDiag.clamp_polarity;
+                if(snap.mod_diag.clamp_leg == 0) clampA = snap.mod_diag.clamp_polarity;
+                if(snap.mod_diag.clamp_leg == 1) clampB = snap.mod_diag.clamp_polarity;
+                if(snap.mod_diag.clamp_leg == 2) clampC = snap.mod_diag.clamp_polarity;
             }
             else
             {
@@ -2947,126 +2968,94 @@ void MainWindow::runFor(int num_steps)
                         return 1.0;
                     return 0.0;
                 };
-                clampA = clampVal(duty.a_norm);
-                clampB = clampVal(duty.b_norm);
-                clampC = clampVal(duty.c_norm);
+                clampA = clampVal(snap.duty.a_norm);
+                clampB = clampVal(snap.duty.b_norm);
+                clampC = clampVal(snap.duty.c_norm);
             }
-            listClampA.append(QPointF(m_time, clampA));
-            listClampB.append(QPointF(m_time, clampB));
-            listClampC.append(QPointF(m_time, clampC));
+            listClampA.append(QPointF(snap.time_s, clampA));
+            listClampB.append(QPointF(snap.time_s, clampB));
+            listClampC.append(QPointF(snap.time_s, clampC));
 
-            listPwmT1.append(QPointF(m_time, modDiag.t1));
-            listPwmT2.append(QPointF(m_time, modDiag.t2));
-            listPwmT0.append(QPointF(m_time, modDiag.t0));
-            listPwmSector.append(QPointF(m_time, modDiag.sector));
+            listPwmT1.append(QPointF(snap.time_s, snap.mod_diag.t1));
+            listPwmT2.append(QPointF(snap.time_s, snap.mod_diag.t2));
+            listPwmT0.append(QPointF(snap.time_s, snap.mod_diag.t0));
+            listPwmSector.append(QPointF(snap.time_s, snap.mod_diag.sector));
         }
 
-        //add voltages to plot here so that we see the SVM waveforms
         if(ui->cb_PhaseVolts->isChecked())
         {
-            listCVa.append(QPointF(m_time, Va));
-            listCVb.append(QPointF(m_time, Vb));
-            listCVc.append(QPointF(m_time, Vc));
+            listCVa.append(QPointF(snap.time_s, Va_cmd));
+            listCVb.append(QPointF(snap.time_s, Vb_cmd));
+            listCVc.append(QPointF(snap.time_s, Vc_cmd));
         }
 
-        //remove space vector modulation
-        inverter.RemoveCommonMode(voltages);
-        Va = voltages.a;
-        Vb = voltages.b;
-        Vc = voltages.c;
-
-        //one period delay to simulate slow timer reload in target hardware
-        if(ui->ExtraCycleDelay->isChecked())
-            motor->Step(m_oldVa,m_oldVb,m_oldVc);
-        else
-            motor->Step(Va,Vb,Vc);
-        if (!std::isfinite(motor->getIaSamp()) || !std::isfinite(motor->getIbSamp()) || !std::isfinite(motor->getIcSamp()))
-        {
-            qWarning().noquote() << QString("runFor: non-finite phase currents at step=%1 time=%2 ia=%3 ib=%4 ic=%5")
-                                        .arg(i)
-                                        .arg(m_time, 0, 'g', 9)
-                                        .arg(motor->getIaSamp(), 0, 'g', 9)
-                                        .arg(motor->getIbSamp(), 0, 'g', 9)
-                                        .arg(motor->getIcSamp(), 0, 'g', 9);
-        }
-        m_oldVa = Va;
-        m_oldVb = Vb;
-        m_oldVb = Vb;
-
-        //motor->Step(0,0,0);
         if(ui->cb_PhaseCurrs->isChecked())
         {
-            listIa.append(QPointF(m_time, motor->getIaSamp()));
-            listIb.append(QPointF(m_time, motor->getIbSamp()));
-            listIc.append(QPointF(m_time, motor->getIcSamp()));
+            listIa.append(QPointF(snap.time_s, snap.motor.ia_samp));
+            listIb.append(QPointF(snap.time_s, snap.motor.ib_samp));
+            listIc.append(QPointF(snap.time_s, snap.motor.ic_samp));
         }
-        if (invRipple.valid)
-        {
-            const double ia_pp = invRipple.i_max_A[0] - invRipple.i_min_A[0];
-            const double ib_pp = invRipple.i_max_A[1] - invRipple.i_min_A[1];
-            const double ic_pp = invRipple.i_max_A[2] - invRipple.i_min_A[2];
-            listInvIaPp.append(QPointF(m_time, ia_pp));
-            listInvIbPp.append(QPointF(m_time, ib_pp));
-            listInvIcPp.append(QPointF(m_time, ic_pp));
-        }
-        listIq.append(QPointF(m_time, motor->getIq()));
-        listId.append(QPointF(m_time, motor->getId()));
 
-        listMFreq.append(QPointF(m_time, (motor->getMotorFreq()*m_Poles)));
+        if (snap.inv_ripple.valid)
+        {
+            const double ia_pp = snap.inv_ripple.i_max_A[0] - snap.inv_ripple.i_min_A[0];
+            const double ib_pp = snap.inv_ripple.i_max_A[1] - snap.inv_ripple.i_min_A[1];
+            const double ic_pp = snap.inv_ripple.i_max_A[2] - snap.inv_ripple.i_min_A[2];
+            listInvIaPp.append(QPointF(snap.time_s, ia_pp));
+            listInvIbPp.append(QPointF(snap.time_s, ib_pp));
+            listInvIcPp.append(QPointF(snap.time_s, ic_pp));
+        }
+
+        listIq.append(QPointF(snap.time_s, snap.motor.iq));
+        listId.append(QPointF(snap.time_s, snap.motor.id));
+
+        listMFreq.append(QPointF(snap.time_s, (snap.motor.motor_freq_hz * m_Poles)));
         if(ui->cb_MotorPos->isChecked())
         {
-            listMPos.append(QPointF(m_time, motor->getMotorPosition()));
-            listContMPos.append(QPointF(m_time, (360.0 * PwmGeneration::GetAngle())/TWO_PI_CONT));
+            listMPos.append(QPointF(snap.time_s, snap.motor.motor_pos_deg));
+            listContMPos.append(QPointF(snap.time_s, (360.0 * PwmGeneration::GetAngle())/TWO_PI_CONT));
         }
 
-          //inlcude here to see sinusoidal waveforms that motor sees
-//        if(ui->cb_PhaseVolts->isChecked())
-//        {
-//            listCVa.append(QPointF(m_time, Va));
-//            listCVb.append(QPointF(m_time, Vb));
-//            listCVc.append(QPointF(m_time, Vc));
-//        }
-        listCVq.append(QPointF(m_time, (m_Vdc/65536) * Param::GetFloat(Param::uq)));
-        listCVd.append(QPointF(m_time, (m_Vdc/65536) * Param::GetFloat(Param::ud)));
+        listCVq.append(QPointF(snap.time_s, (snap.vdc_V/65536) * Param::GetFloat(Param::uq)));
+        listCVd.append(QPointF(snap.time_s, (snap.vdc_V/65536) * Param::GetFloat(Param::ud)));
 
-        listCIq.append(QPointF(m_time, Param::GetFloat(Param::iq)));
-        listCId.append(QPointF(m_time, Param::GetFloat(Param::id)));
+        listCIq.append(QPointF(snap.time_s, Param::GetFloat(Param::iq)));
+        listCId.append(QPointF(snap.time_s, Param::GetFloat(Param::id)));
 
-        listCifw.append(QPointF(m_time, Param::GetFloat(Param::ifw)));
-        //listCivlim.append(QPointF(m_time, Param::GetFloat(Param::vlim)));
+        listCifw.append(QPointF(snap.time_s, Param::GetFloat(Param::ifw)));
 
-        listVVd.append(QPointF(m_time, motor->getVd()));
-        listVVq.append(QPointF(m_time, motor->getVq()));
-        listVVq_bemf.append(QPointF(m_time, motor->getVq_bemf()));
-        listVVq_dueto_id.append(QPointF(m_time, motor->getVq_dueto_id()));
-        listVVd_dueto_iq.append(QPointF(m_time, motor->getVd_dueto_iq()));
-        listVVq_dueto_Rq.append(QPointF(m_time, motor->getVq_dueto_Rq()));
-        listVVd_dueto_Rd.append(QPointF(m_time, motor->getVd_dueto_Rd()));
-        listVVLd.append(QPointF(m_time, motor->getVLd()));
-        listVVLq.append(QPointF(m_time, motor->getVLq()));
+        listVVd.append(QPointF(snap.time_s, snap.motor.vd));
+        listVVq.append(QPointF(snap.time_s, snap.motor.vq));
+        listVVq_bemf.append(QPointF(snap.time_s, snap.motor.vq_bemf));
+        listVVq_dueto_id.append(QPointF(snap.time_s, snap.motor.vq_dueto_id));
+        listVVd_dueto_iq.append(QPointF(snap.time_s, snap.motor.vd_dueto_iq));
+        listVVq_dueto_Rq.append(QPointF(snap.time_s, snap.motor.vq_dueto_rq));
+        listVVd_dueto_Rd.append(QPointF(snap.time_s, snap.motor.vd_dueto_rd));
+        listVVLd.append(QPointF(snap.time_s, snap.motor.vld));
+        listVVLq.append(QPointF(snap.time_s, snap.motor.vlq));
 
         if(ui->rb_OP_Amps->isChecked())
-            listIdIq.append(QPointF(motor->getId(), motor->getIq()));
+            listIdIq.append(QPointF(snap.motor.id, snap.motor.iq));
         else
-            listIdIq.append(QPointF(motor->getVd(), motor->getVq()));
+            listIdIq.append(QPointF(snap.motor.vd, snap.motor.vq));
 
-        const double elec_power = (Va * motor->getIaSamp()) + (Vb * motor->getIbSamp()) + (Vc * motor->getIcSamp());
-        double efficiency = 0;
+        const double elec_power = snap.elec_power_w;
+        double efficiency = 0.0;
         if(ui->cb_Efficiency->isChecked() && std::abs(elec_power) > 1e-9)
-            efficiency = 100.0 * (motor->getPower() / elec_power);
+            efficiency = 100.0 * (snap.motor.power_w / elec_power);
 
-        const double inv_igbt_cond_W = invLoss.phase[0].igbt_cond_W + invLoss.phase[1].igbt_cond_W + invLoss.phase[2].igbt_cond_W;
-        const double inv_diode_cond_W = invLoss.phase[0].diode_cond_W + invLoss.phase[1].diode_cond_W + invLoss.phase[2].diode_cond_W;
-        const double inv_igbt_sw_W = invLoss.phase[0].igbt_sw_W + invLoss.phase[1].igbt_sw_W + invLoss.phase[2].igbt_sw_W;
-        const double inv_diode_rr_W = invLoss.phase[0].diode_rr_W + invLoss.phase[1].diode_rr_W + invLoss.phase[2].diode_rr_W;
+        const double inv_igbt_cond_W = snap.inv_loss.phase[0].igbt_cond_W + snap.inv_loss.phase[1].igbt_cond_W + snap.inv_loss.phase[2].igbt_cond_W;
+        const double inv_diode_cond_W = snap.inv_loss.phase[0].diode_cond_W + snap.inv_loss.phase[1].diode_cond_W + snap.inv_loss.phase[2].diode_cond_W;
+        const double inv_igbt_sw_W = snap.inv_loss.phase[0].igbt_sw_W + snap.inv_loss.phase[1].igbt_sw_W + snap.inv_loss.phase[2].igbt_sw_W;
+        const double inv_diode_rr_W = snap.inv_loss.phase[0].diode_rr_W + snap.inv_loss.phase[1].diode_rr_W + snap.inv_loss.phase[2].diode_rr_W;
         const double inv_total_W = inv_igbt_cond_W + inv_diode_cond_W + inv_igbt_sw_W + inv_diode_rr_W;
         double inv_eff = 0.0;
         if(elec_power > 1e-6)
             inv_eff = 100.0 * (elec_power / (elec_power + inv_total_W));
-        const double torque_ripple_pp = invRipple.torque_valid ? (invRipple.torque_max_Nm - invRipple.torque_min_Nm) : 0.0;
-        const double tj_igbt_avg = (invThermal.igbt_C[0] + invThermal.igbt_C[1] + invThermal.igbt_C[2]) / 3.0;
-        const double tj_diode_avg = (invThermal.diode_C[0] + invThermal.diode_C[1] + invThermal.diode_C[2]) / 3.0;
-        if(pwmEnabled)
+        const double torque_ripple_pp = snap.inv_ripple.torque_valid ? (snap.inv_ripple.torque_max_Nm - snap.inv_ripple.torque_min_Nm) : 0.0;
+        const double tj_igbt_avg = (snap.inv_thermal.igbt_C[0] + snap.inv_thermal.igbt_C[1] + snap.inv_thermal.igbt_C[2]) / 3.0;
+        const double tj_diode_avg = (snap.inv_thermal.diode_C[0] + snap.inv_thermal.diode_C[1] + snap.inv_thermal.diode_C[2]) / 3.0;
+        if(snap.pwm_enabled)
         {
             sumLossIgbtCond += inv_igbt_cond_W;
             sumLossDiodeCond += inv_diode_cond_W;
@@ -3085,31 +3074,29 @@ void MainWindow::runFor(int num_steps)
 
         if(logEnabled)
         {
-            const double vd_ctrl = controller.UdVolts(m_Vdc);
-            const double vq_ctrl = controller.UqVolts(m_Vdc);
-            const double rpm = motor->getMotorFreq() * 60.0;
-            const double zero_seq_log = modDiag.zero_seq;
-            const double ia_pp = invRipple.valid ? (invRipple.i_max_A[0] - invRipple.i_min_A[0]) : 0.0;
-            const double ib_pp = invRipple.valid ? (invRipple.i_max_A[1] - invRipple.i_min_A[1]) : 0.0;
-            const double ic_pp = invRipple.valid ? (invRipple.i_max_A[2] - invRipple.i_min_A[2]) : 0.0;
-            const double ia_end = invRipple.valid ? invRipple.i_end_A[0] : motor->getIaSamp();
-            const double ib_end = invRipple.valid ? invRipple.i_end_A[1] : motor->getIbSamp();
-            const double ic_end = invRipple.valid ? invRipple.i_end_A[2] : motor->getIcSamp();
-            const double torque_pp = invRipple.torque_valid ? (invRipple.torque_max_Nm - invRipple.torque_min_Nm) : 0.0;
-            logStream << m_time << "," << i << "," << (pwmEnabled ? 1 : 0) << "," << m_Vdc << ","
-                      << duty.a_norm << "," << duty.b_norm << "," << duty.c_norm << ","
+            const double rpm = snap.motor.motor_freq_hz * 60.0;
+            const double zero_seq_log = snap.mod_diag.zero_seq;
+            const double ia_pp = snap.inv_ripple.valid ? (snap.inv_ripple.i_max_A[0] - snap.inv_ripple.i_min_A[0]) : 0.0;
+            const double ib_pp = snap.inv_ripple.valid ? (snap.inv_ripple.i_max_A[1] - snap.inv_ripple.i_min_A[1]) : 0.0;
+            const double ic_pp = snap.inv_ripple.valid ? (snap.inv_ripple.i_max_A[2] - snap.inv_ripple.i_min_A[2]) : 0.0;
+            const double ia_end = snap.inv_ripple.valid ? snap.inv_ripple.i_end_A[0] : snap.motor.ia_samp;
+            const double ib_end = snap.inv_ripple.valid ? snap.inv_ripple.i_end_A[1] : snap.motor.ib_samp;
+            const double ic_end = snap.inv_ripple.valid ? snap.inv_ripple.i_end_A[2] : snap.motor.ic_samp;
+            const double torque_pp = snap.inv_ripple.torque_valid ? (snap.inv_ripple.torque_max_Nm - snap.inv_ripple.torque_min_Nm) : 0.0;
+            logStream << snap.time_s << "," << snap.step_index << "," << (snap.pwm_enabled ? 1 : 0) << "," << snap.vdc_V << ","
+                      << snap.duty.a_norm << "," << snap.duty.b_norm << "," << snap.duty.c_norm << ","
                       << Va_cmd << "," << Vb_cmd << "," << Vc_cmd << ","
                       << Va << "," << Vb << "," << Vc << ","
-                      << motor->getIaSamp() << "," << motor->getIbSamp() << "," << motor->getIcSamp() << ","
-                      << motor->getId() << "," << motor->getIq() << ","
-                      << controller.Id() << "," << controller.Iq() << "," << controller.Ifw() << ","
-                      << vd_ctrl << "," << vq_ctrl << ","
-                      << motor->getElecPosition() << "," << rpm << "," << motor->getTorque() << "," << motor->getPower() << ","
-                      << modModeStr << "," << modBlend << "," << modDiag.sector << "," << modDiag.t1 << "," << modDiag.t2 << "," << modDiag.t0 << ","
-                      << zero_seq_log << "," << modDiag.clamp_leg << "," << modDiag.clamp_polarity << ","
+                      << snap.motor.ia_samp << "," << snap.motor.ib_samp << "," << snap.motor.ic_samp << ","
+                      << snap.motor.id << "," << snap.motor.iq << ","
+                      << snap.controller.id << "," << snap.controller.iq << "," << snap.controller.ifw << ","
+                      << snap.controller.vd_ctrl << "," << snap.controller.vq_ctrl << ","
+                      << snap.motor.elec_pos_deg << "," << rpm << "," << snap.motor.torque_nm << "," << snap.motor.power_w << ","
+                      << modModeStr << "," << modBlend << "," << snap.mod_diag.sector << "," << snap.mod_diag.t1 << "," << snap.mod_diag.t2 << "," << snap.mod_diag.t0 << ","
+                      << zero_seq_log << "," << snap.mod_diag.clamp_leg << "," << snap.mod_diag.clamp_polarity << ","
                       << inv_igbt_cond_W << "," << inv_diode_cond_W << "," << inv_igbt_sw_W << "," << inv_diode_rr_W << ","
                       << inv_total_W << "," << inv_eff << ","
-                      << invThermal.case_C << "," << tj_igbt_avg << "," << tj_diode_avg << ","
+                      << snap.inv_thermal.case_C << "," << tj_igbt_avg << "," << tj_diode_avg << ","
                       << ia_pp << "," << ib_pp << "," << ic_pp << "," << ia_end << "," << ib_end << "," << ic_end << ","
                       << torque_pp
                       << "\n";
@@ -3117,39 +3104,59 @@ void MainWindow::runFor(int num_steps)
 
         if(ui->rb_Speed->isChecked())
         {
-            listPower.append(QPointF(motor->getMotorFreq()*60, motor->getPower()/1000));
-            listTorque.append(QPointF(motor->getMotorFreq()*60, motor->getTorque()));
-            listTorqueRipplePp.append(QPointF(motor->getMotorFreq()*60, torque_ripple_pp));
-            listLossIgbtCond.append(QPointF(motor->getMotorFreq()*60, inv_igbt_cond_W/1000));
-            listLossDiodeCond.append(QPointF(motor->getMotorFreq()*60, inv_diode_cond_W/1000));
-            listLossIgbtSw.append(QPointF(motor->getMotorFreq()*60, inv_igbt_sw_W/1000));
-            listLossDiodeRr.append(QPointF(motor->getMotorFreq()*60, inv_diode_rr_W/1000));
-            listLossTotal.append(QPointF(motor->getMotorFreq()*60, inv_total_W/1000));
+            const double rpm = snap.motor.motor_freq_hz * 60.0;
+            listPower.append(QPointF(rpm, snap.motor.power_w/1000));
+            listTorque.append(QPointF(rpm, snap.motor.torque_nm));
+            listTorqueRipplePp.append(QPointF(rpm, torque_ripple_pp));
+            listLossIgbtCond.append(QPointF(rpm, inv_igbt_cond_W/1000));
+            listLossDiodeCond.append(QPointF(rpm, inv_diode_cond_W/1000));
+            listLossIgbtSw.append(QPointF(rpm, inv_igbt_sw_W/1000));
+            listLossDiodeRr.append(QPointF(rpm, inv_diode_rr_W/1000));
+            listLossTotal.append(QPointF(rpm, inv_total_W/1000));
             if(ui->cb_Efficiency->isChecked())
             {
-                listElecPower.append(QPointF(motor->getMotorFreq()*60, elec_power/1000));
-                listEfficiency.append(QPointF(motor->getMotorFreq()*60, efficiency));
+                listElecPower.append(QPointF(rpm, elec_power/1000));
+                listEfficiency.append(QPointF(rpm, efficiency));
             }
         }
         else
         {
-            listPower.append(QPointF(m_time, motor->getPower()/1000));
-            listTorque.append(QPointF(m_time, motor->getTorque()));
-            listTorqueRipplePp.append(QPointF(m_time, torque_ripple_pp));
-            listLossIgbtCond.append(QPointF(m_time, inv_igbt_cond_W/1000));
-            listLossDiodeCond.append(QPointF(m_time, inv_diode_cond_W/1000));
-            listLossIgbtSw.append(QPointF(m_time, inv_igbt_sw_W/1000));
-            listLossDiodeRr.append(QPointF(m_time, inv_diode_rr_W/1000));
-            listLossTotal.append(QPointF(m_time, inv_total_W/1000));
+            listPower.append(QPointF(snap.time_s, snap.motor.power_w/1000));
+            listTorque.append(QPointF(snap.time_s, snap.motor.torque_nm));
+            listTorqueRipplePp.append(QPointF(snap.time_s, torque_ripple_pp));
+            listLossIgbtCond.append(QPointF(snap.time_s, inv_igbt_cond_W/1000));
+            listLossDiodeCond.append(QPointF(snap.time_s, inv_diode_cond_W/1000));
+            listLossIgbtSw.append(QPointF(snap.time_s, inv_igbt_sw_W/1000));
+            listLossDiodeRr.append(QPointF(snap.time_s, inv_diode_rr_W/1000));
+            listLossTotal.append(QPointF(snap.time_s, inv_total_W/1000));
             if(ui->cb_Efficiency->isChecked())
             {
-                listElecPower.append(QPointF(m_time, elec_power/1000));
-                listEfficiency.append(QPointF(m_time, efficiency));
+                listElecPower.append(QPointF(snap.time_s, elec_power/1000));
+                listEfficiency.append(QPointF(snap.time_s, efficiency));
             }
         }
+    };
 
-        m_time += m_timestep;
+    sim::RunSpec settle{};
+    settle.steps = 0;
+    sim::RunSpec measure{};
+    measure.steps = num_steps;
+    const sim::RunResult runResult = m_simRunner.Run(simInputs, settle, measure, hooks);
+    if (!runResult.ok)
+    {
+        qCritical().noquote() << QString("runFor: SimRunner failed: %1").arg(QString::fromStdString(runResult.error));
+        app::Breadcrumb("runFor: SimRunner failed");
+        return;
     }
+
+    const sim::SimState& simState = m_simRunner.state();
+    m_time = simState.time_s;
+    m_old_time = simState.old_time_10ms;
+    m_old_ms_time = simState.old_time_ms;
+    m_oldVa = simState.old_va;
+    m_oldVb = simState.old_vb;
+    m_oldVc = simState.old_vc;
+    m_lastTorqueDemand = simState.last_torque_demand;
 
     qInfo().noquote() << "runFor: end";
     app::Breadcrumb("runFor: end");
@@ -3780,5 +3787,674 @@ void MainWindow::on_rb_OP_Amps_toggled(bool checked)
         idigGraph->setAxisText("Vd (V)", "Vq (V)", "");
         idigGraph->updateSeries("V (V)", left, IDIQAMPS);
     }
+}
+
+QJsonObject MainWindow::buildSweepJsonFromUi() const
+{
+    QJsonObject root;
+    root.insert("schema_version", 1);
+    root.insert("mode", "OperatingMapSweep");
+
+    auto readDouble = [](QLineEdit* field, double fallback)
+    {
+        bool ok = false;
+        const double val = field ? field->text().toDouble(&ok) : fallback;
+        return ok ? val : fallback;
+    };
+
+    const double speed_rpm = readDouble(ui->startRpm, 0.0);
+    const double iq = readDouble(ui->IqManual, 0.0);
+    const double id = readDouble(ui->IdManual, 0.0);
+    const double vdc = m_Vdc;
+    const double temp = readDouble(ui->sinkTemp, 25.0);
+    auto isAllowedFsw = [](double hz)
+    {
+        return (std::abs(hz - 4400.0) < 1e-6) ||
+               (std::abs(hz - 8800.0) < 1e-6) ||
+               (std::abs(hz - 17600.0) < 1e-6);
+    };
+    double f_sw = PwmFrequencyHzFromParam(Param::GetInt(Param::pwmfrq));
+    if (!isAllowedFsw(f_sw))
+    {
+        qWarning().noquote() << QString("From UI: unsupported pwmfrq=%1 Hz; defaulting to 8800 Hz").arg(f_sw);
+        f_sw = 8800.0;
+    }
+
+    QJsonObject axes;
+    axes.insert("speed_rpm", QJsonArray{speed_rpm});
+    axes.insert("iq_A", QJsonArray{iq});
+    axes.insert("id_A", QJsonArray{id});
+    axes.insert("Vdc_V", QJsonArray{vdc});
+    axes.insert("temp_C", QJsonArray{temp});
+    axes.insert("f_sw_Hz", QJsonArray{f_sw});
+    root.insert("axes", axes);
+
+    QJsonObject run;
+    run.insert("settle_ms", 200.0);
+    run.insert("measure_ms", 200.0);
+    root.insert("run", run);
+
+    root.insert("pole_pairs", static_cast<int>(m_Poles));
+    root.insert("baseline", "SVPWM");
+    root.insert("candidates", QJsonArray{
+        "SVPWM", "DPWMMIN", "DPWMMAX", "DPWM0", "DPWM1", "DPWM2", "DPWM3", "AUTO_RULE", "AUTO_PRED"
+    });
+    root.insert("thd_mode", "control_step_proxy");
+    root.insert("thd_samples", 2048);
+
+    const double min_on_s = std::max(0.0, readDouble(ui->minOnUs, 0.0)) * 1e-6;
+    const double min_off_s = std::max(0.0, readDouble(ui->minOffUs, 0.0)) * 1e-6;
+    const double min_pulse_s = std::max(min_on_s, min_off_s);
+    root.insert("min_pulse_s", min_pulse_s);
+
+    QJsonObject constraints;
+    constraints.insert("thd_max_pct", -1.0);
+    constraints.insert("i_ripple_rms_max_a", -1.0);
+    constraints.insert("min_pulse_margin_min_s", 0.0);
+    root.insert("constraints", constraints);
+
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (!outDir.isEmpty())
+        root.insert("output_dir", outDir);
+
+    const QString presetKey = currentPowerStagePresetKey();
+    if (!presetKey.isEmpty())
+        root.insert("powerstage_preset", presetKey);
+
+    return root;
+}
+
+bool MainWindow::parseSweepJsonText(QJsonDocument* doc, QString* error) const
+{
+    if (!doc)
+        return false;
+    *doc = {};
+
+    const QString text = ui->sweepConfigJson ? ui->sweepConfigJson->toPlainText() : QString();
+    if (text.trimmed().isEmpty())
+    {
+        if (error)
+            *error = "Sweep JSON is empty";
+        return false;
+    }
+    QJsonParseError parseError{};
+    const QJsonDocument json = QJsonDocument::fromJson(text.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+    {
+        if (error)
+            *error = QString("JSON parse error at %1: %2").arg(parseError.offset).arg(parseError.errorString());
+        return false;
+    }
+    if (!json.isObject())
+    {
+        if (error)
+            *error = "Sweep JSON must be an object";
+        return false;
+    }
+    *doc = json;
+    return true;
+}
+
+bool MainWindow::saveSweepJsonToPath(const QString& path, QString* error) const
+{
+    QJsonDocument doc;
+    if (!parseSweepJsonText(&doc, error))
+        return false;
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        if (error)
+            *error = QString("Failed to write %1").arg(path);
+        return false;
+    }
+    file.write(doc.toJson(QJsonDocument::Indented));
+    return true;
+}
+
+bool MainWindow::loadSweepJsonFromPath(const QString& path, QString* error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        if (error)
+            *error = QString("Failed to open %1").arg(path);
+        return false;
+    }
+    const QByteArray bytes = file.readAll();
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+    {
+        if (error)
+            *error = QString("JSON parse error: %1").arg(parseError.errorString());
+        return false;
+    }
+    if (ui->sweepConfigJson)
+        ui->sweepConfigJson->setPlainText(QString::fromUtf8(doc.toJson(QJsonDocument::Indented)));
+    return true;
+}
+
+bool MainWindow::buildSweepContext(sim::SweepContext* ctx, sim::PowerModuleParams* moduleParams, QString* error)
+{
+    if (!ctx || !moduleParams)
+        return false;
+    if (!motor)
+    {
+        if (error)
+            *error = "Motor is null";
+        return false;
+    }
+
+    auto readDouble = [](QLineEdit* field, double fallback)
+    {
+        bool ok = false;
+        const double val = field ? field->text().toDouble(&ok) : fallback;
+        return ok ? val : fallback;
+    };
+
+    sim::InverterParams invParams;
+    invParams.pwm_frequency_hz = PwmFrequencyHzFromParam(Param::GetInt(Param::pwmfrq));
+    invParams.deadtime_s = std::max(0.0, readDouble(ui->deadtimeUs, 2.0)) * 1e-6;
+    invParams.min_on_s = std::max(0.0, readDouble(ui->minOnUs, 0.0)) * 1e-6;
+    invParams.min_off_s = std::max(0.0, readDouble(ui->minOffUs, 0.0)) * 1e-6;
+    invParams.integrate_currents_in_pwm = ui->cb_RippleLoss && ui->cb_RippleLoss->isChecked();
+    invParams.phase_R_ohm = std::max(0.0, m_Rs);
+    invParams.phase_L_H = std::max(0.0, 0.5 * (m_Ld + m_Lq));
+    invParams.has_parallel_devices_per_switch = false;
+    invParams.parallel_devices_per_switch = 1;
+    const QString presetKey = currentPowerStagePresetKey();
+    if (const PowerStagePreset* preset = findPowerStagePreset(presetKey))
+    {
+        if (preset->has_parallel_devices_per_switch)
+        {
+            invParams.has_parallel_devices_per_switch = true;
+            invParams.parallel_devices_per_switch = std::max(1, preset->parallel_devices_per_switch);
+        }
+    }
+    invParams.compute_torque_ripple = invParams.integrate_currents_in_pwm;
+    invParams.pole_pairs = std::max(0.0, m_Poles);
+    invParams.flux_Wb = std::max(0.0, m_fluxLinkage);
+    invParams.ld_H = std::max(0.0, m_Ld);
+    invParams.lq_H = std::max(0.0, m_Lq);
+    invParams.sink_temp_C = readDouble(ui->sinkTemp, 25.0);
+    invParams.thermal_tau_s = std::max(0.01, readDouble(ui->thermalTau, 1.0));
+
+    sim::PowerModuleParams modParams = sim::PM300CLA060();
+    modParams.vref_V = std::max(1.0, readDouble(ui->vrefV, modParams.vref_V));
+    modParams.kv = std::max(0.0, readDouble(ui->kvExp, modParams.kv));
+    modParams.diode_vf_25C_V = std::max(0.0, readDouble(ui->diodeVf25, modParams.diode_vf_25C_V));
+    modParams.diode_vf_125C_V = std::max(0.0, readDouble(ui->diodeVf125, modParams.diode_vf_125C_V));
+    modParams.rth_jc_igbt_C_per_W = std::max(0.0, readDouble(ui->rthJcIgbt, modParams.rth_jc_igbt_C_per_W));
+    modParams.rth_jc_diode_C_per_W = std::max(0.0, readDouble(ui->rthJcDiode, modParams.rth_jc_diode_C_per_W));
+    modParams.rth_cs_C_per_W = std::max(0.0, readDouble(ui->rthCs, modParams.rth_cs_C_per_W));
+    modParams.igbt_vce_sat = ParseCurvePoints<4>(ui->vcePoints->toPlainText(), modParams.igbt_vce_sat);
+    modParams.eon_mJ = ParseCurvePoints<3>(ui->eonPoints->toPlainText(), modParams.eon_mJ);
+    modParams.eoff_mJ = ParseCurvePoints<3>(ui->eoffPoints->toPlainText(), modParams.eoff_mJ);
+    modParams.irr_A = ParseCurvePoints<3>(ui->irrPoints->toPlainText(), modParams.irr_A);
+    modParams.trr_us = ParseCurvePoints<3>(ui->trrPoints->toPlainText(), modParams.trr_us);
+
+    sim::SimInputs inputs;
+    inputs.timestep_s = m_timestep;
+    inputs.vdc_V = m_Vdc;
+    inputs.extra_cycle_delay = ui->ExtraCycleDelay && ui->ExtraCycleDelay->isChecked();
+    inputs.mod_mode = sim::ModulationMode::SVPWM;
+    inputs.mod_blend = std::clamp(readDouble(ui->modBlend, 1.0), 0.0, 1.0);
+    inputs.inv_params = invParams;
+    inputs.module_params = modParams;
+
+    ctx->runner = &m_simRunner;
+    ctx->motor = motor;
+    ctx->base_inputs = inputs;
+    *moduleParams = modParams;
+    return true;
+}
+
+QJsonObject MainWindow::buildScenarioPresetJson(const QString& scenario) const
+{
+    QJsonObject root = buildSweepJsonFromUi();
+    QJsonObject axes = root.value("axes").toObject();
+
+    auto readDouble = [](QLineEdit* field, double fallback)
+    {
+        bool ok = false;
+        const double val = field ? field->text().toDouble(&ok) : fallback;
+        return ok ? val : fallback;
+    };
+
+    const double speed = readDouble(ui->startRpm, 0.0);
+    const double iq = readDouble(ui->IqManual, 0.0);
+    const double id = readDouble(ui->IdManual, 0.0);
+
+    if (scenario == "FixedPointFreqSweep")
+    {
+        root.insert("mode", "FixedPointFreqSweep");
+        // Firmware-supported carrier frequencies only.
+        axes.insert("f_sw_Hz", QJsonArray{4400.0, 8800.0, 17600.0});
+    }
+    else if (scenario == "Operating Map" || scenario == "Full Pipeline")
+    {
+        root.insert("mode", "OperatingMapSweep");
+        const double speedStart = (std::abs(speed) > 1e-3) ? (speed * 0.5) : 0.0;
+        const double speedStop = (std::abs(speed) > 1e-3) ? (speed * 1.5) : 6000.0;
+        const double iqStart = (std::abs(iq) > 1e-3) ? (iq * 0.5) : 0.0;
+        const double iqStop = (std::abs(iq) > 1e-3) ? (iq * 1.5) : 300.0;
+
+        QJsonObject speedAxis;
+        speedAxis.insert("start", speedStart);
+        speedAxis.insert("stop", speedStop);
+        speedAxis.insert("steps", 7);
+        axes.insert("speed_rpm", speedAxis);
+
+        QJsonObject iqAxis;
+        iqAxis.insert("start", iqStart);
+        iqAxis.insert("stop", iqStop);
+        iqAxis.insert("steps", 7);
+        axes.insert("iq_A", iqAxis);
+
+        axes.insert("id_A", QJsonArray{id});
+    }
+    else if (scenario == "Driving Cycle")
+    {
+        root.insert("mode", "OperatingMapSweep");
+    }
+
+    root.insert("axes", axes);
+    return root;
+}
+
+void MainWindow::applyScenarioPreset(const QString& scenario)
+{
+    if (!ui || !ui->sweepConfigJson)
+        return;
+    const QJsonObject root = buildScenarioPresetJson(scenario);
+    ui->sweepConfigJson->setPlainText(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+}
+
+void MainWindow::appendRunLog(const QString& text)
+{
+    if (!ui || !ui->runLog)
+        return;
+    ui->runLog->appendPlainText(text);
+    QTextCursor cursor = ui->runLog->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    ui->runLog->setTextCursor(cursor);
+}
+
+void MainWindow::refreshArtifacts(const QString& outDir)
+{
+    if (!ui || !ui->artifactList)
+        return;
+    QDir dir(outDir);
+    if (!dir.exists())
+        return;
+    ui->artifactList->clear();
+    const QStringList files = dir.entryList(QDir::Files, QDir::Name);
+    for (const QString& file : files)
+    {
+        auto* item = new QListWidgetItem(file, ui->artifactList);
+        item->setData(Qt::UserRole, dir.filePath(file));
+    }
+}
+
+void MainWindow::setRunUiEnabled(bool enabled)
+{
+    if (!ui)
+        return;
+    if (ui->pbRunScenario)
+        ui->pbRunScenario->setEnabled(enabled);
+    if (ui->pbCancelRun)
+        ui->pbCancelRun->setEnabled(!enabled);
+    if (ui->scenarioPreset)
+        ui->scenarioPreset->setEnabled(enabled);
+    if (ui->pbRunSweep)
+        ui->pbRunSweep->setEnabled(enabled);
+    if (ui->pbMakeLut)
+        ui->pbMakeLut->setEnabled(enabled);
+    if (ui->pbCycleEval)
+        ui->pbCycleEval->setEnabled(enabled);
+    if (ui->pbMakeReport)
+        ui->pbMakeReport->setEnabled(enabled);
+    if (ui->sweepConfigJson)
+        ui->sweepConfigJson->setReadOnly(!enabled);
+}
+
+void MainWindow::on_pbSweepLoad_clicked()
+{
+    const QString path = QFileDialog::getOpenFileName(this, "Load Sweep Config", QString(), "JSON Files (*.json)");
+    if (path.isEmpty())
+        return;
+    QString error;
+    if (!loadSweepJsonFromPath(path, &error))
+    {
+        QMessageBox::warning(this, "Load Sweep Config", error);
+        return;
+    }
+    if (ui->sweepConfigPath)
+        ui->sweepConfigPath->setText(path);
+}
+
+void MainWindow::on_pbSweepSave_clicked()
+{
+    QString path = ui->sweepConfigPath ? ui->sweepConfigPath->text().trimmed() : QString();
+    if (path.isEmpty())
+        path = QFileDialog::getSaveFileName(this, "Save Sweep Config", QString(), "JSON Files (*.json)");
+    if (path.isEmpty())
+        return;
+    QString error;
+    if (!saveSweepJsonToPath(path, &error))
+    {
+        QMessageBox::warning(this, "Save Sweep Config", error);
+        return;
+    }
+    if (ui->sweepConfigPath)
+        ui->sweepConfigPath->setText(path);
+}
+
+void MainWindow::on_pbSweepFromUi_clicked()
+{
+    QJsonObject root = buildSweepJsonFromUi();
+    if (ui->sweepConfigJson)
+        ui->sweepConfigJson->setPlainText(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+}
+
+void MainWindow::on_pbRunSweep_clicked()
+{
+    enforceSimulationSafeParams(nullptr);
+
+    QString path = ui->sweepConfigPath ? ui->sweepConfigPath->text().trimmed() : QString();
+    if (path.isEmpty())
+    {
+        QMessageBox::warning(this, "Run Sweep", "Sweep JSON path is empty");
+        return;
+    }
+    QString error;
+    if (!saveSweepJsonToPath(path, &error))
+    {
+        QMessageBox::warning(this, "Run Sweep", error);
+        return;
+    }
+
+    sim::SweepConfig cfg;
+    if (!sim::LoadSweepConfig(path, &cfg, &error))
+    {
+        QMessageBox::warning(this, "Run Sweep", error);
+        return;
+    }
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (!outDir.isEmpty())
+        cfg.output_dir = outDir;
+
+    sim::SweepContext ctx;
+    sim::PowerModuleParams moduleParams;
+    if (!buildSweepContext(&ctx, &moduleParams, &error))
+    {
+        QMessageBox::warning(this, "Run Sweep", error);
+        return;
+    }
+
+    if (motor)
+        motor->Restart();
+    sim::SimInit init{};
+    init.motor = motor;
+    m_simRunner.Reset(init);
+
+    sim::SweepResult result;
+    if (!sim::RunSweep(cfg, ctx, &result, &error))
+    {
+        QMessageBox::warning(this, "Run Sweep", error);
+        return;
+    }
+    statusBar()->showMessage(QString("Sweep done: %1 points").arg(result.points.size()), 5000);
+}
+
+void MainWindow::on_pbMakeLut_clicked()
+{
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (outDir.isEmpty())
+    {
+        QMessageBox::warning(this, "Make LUT", "Output directory is empty");
+        return;
+    }
+
+    sim::LutConfig config;
+    config.phi_source = "phi_idiq_deg";
+    QJsonDocument doc;
+    if (parseSweepJsonText(&doc, nullptr))
+    {
+        const QJsonObject root = doc.object();
+        const QJsonObject lutObj = root.value("lut").toObject();
+        const QString phiSource = lutObj.value("phi_source").toString().trimmed();
+        if (!phiSource.isEmpty())
+            config.phi_source = phiSource;
+        else
+            config.phi_source = root.value("phi_source").toString().trimmed().isEmpty()
+                                    ? config.phi_source
+                                    : root.value("phi_source").toString().trimmed();
+        if (lutObj.contains("phi_min_deg"))
+            config.phi_min_deg = lutObj.value("phi_min_deg").toDouble(config.phi_min_deg);
+        if (lutObj.contains("phi_max_deg"))
+            config.phi_max_deg = lutObj.value("phi_max_deg").toDouble(config.phi_max_deg);
+        if (lutObj.contains("phi_bins"))
+            config.phi_bins = std::max(1, lutObj.value("phi_bins").toInt(config.phi_bins));
+        if (lutObj.contains("smooth_islands"))
+            config.smooth_islands = lutObj.value("smooth_islands").toBool(config.smooth_islands);
+        if (lutObj.contains("island_min_neighbors"))
+            config.island_min_neighbors = std::max(0, lutObj.value("island_min_neighbors").toInt(config.island_min_neighbors));
+    }
+
+    const QString summaryPath = QDir(outDir).filePath("summary.csv");
+    sim::LutResult lut;
+    QString error;
+    if (!sim::BuildLutFromSummaryCsv(summaryPath, config, &lut, &error))
+    {
+        QMessageBox::warning(this, "Make LUT", error);
+        return;
+    }
+    if (!sim::WriteLutJson(QDir(outDir).filePath("lut.json"), lut, &error) ||
+        !sim::WriteLutHeader(QDir(outDir).filePath("lut_pwm_strategy.h"), lut, &error) ||
+        !sim::WriteLutRuntimeParams(QDir(outDir).filePath("lut_runtime_params.h"), lut, &error))
+    {
+        QMessageBox::warning(this, "Make LUT", error);
+        return;
+    }
+    statusBar()->showMessage("LUT written", 5000);
+}
+
+void MainWindow::on_pbCycleEval_clicked()
+{
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    const QString cycleCsv = ui->cycleCsvPath ? ui->cycleCsvPath->text().trimmed() : QString();
+    if (outDir.isEmpty() || cycleCsv.isEmpty())
+    {
+        QMessageBox::warning(this, "Cycle Eval", "Output dir or cycle CSV is empty");
+        return;
+    }
+
+    const QString pythonExe = ui->pythonExePath ? ui->pythonExePath->text().trimmed() : QString();
+    sim::ProcessOutput output;
+    QString error;
+    const sim::ProcessStatus status = sim::RunPython("tools/cycle_eval/eval_cycle.py",
+                                                     {"--cycle", cycleCsv, "--in", outDir, "--out", outDir},
+                                                     pythonExe, QDir::currentPath(), &output, &error);
+    if (status != sim::ProcessStatus::Ok)
+    {
+        QMessageBox::warning(this, "Cycle Eval",
+                             QString("Cycle eval failed: %1\n%2%3").arg(error, output.std_out, output.std_err));
+        return;
+    }
+    statusBar()->showMessage("Cycle eval done", 5000);
+}
+
+void MainWindow::on_pbMakeReport_clicked()
+{
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (outDir.isEmpty())
+    {
+        QMessageBox::warning(this, "Make Report", "Output dir is empty");
+        return;
+    }
+    const QString reportPath = QDir(outDir).filePath("report.pdf");
+    const QString pythonExe = ui->pythonExePath ? ui->pythonExePath->text().trimmed() : QString();
+    sim::ProcessOutput output;
+    QString error;
+    const sim::ProcessStatus status = sim::RunPython("tools/report/make_report.py",
+                                                     {"--in", outDir, "--out", reportPath},
+                                                     pythonExe, QDir::currentPath(), &output, &error);
+    if (status != sim::ProcessStatus::Ok)
+    {
+        QMessageBox::warning(this, "Make Report",
+                             QString("Report failed: %1\n%2%3").arg(error, output.std_out, output.std_err));
+        return;
+    }
+    statusBar()->showMessage(QString("Report written: %1").arg(reportPath), 5000);
+}
+
+void MainWindow::on_scenarioPreset_currentIndexChanged(int index)
+{
+    Q_UNUSED(index);
+    if (m_suppressScenarioApply)
+        return;
+    if (!ui || !ui->scenarioPreset)
+        return;
+    applyScenarioPreset(ui->scenarioPreset->currentText());
+}
+
+void MainWindow::on_pbRunScenario_clicked()
+{
+    if (!ui || !m_runOrchestrator || m_runOrchestrator->isRunning())
+        return;
+
+    enforceSimulationSafeParams(nullptr);
+
+    const QString path = ui->sweepConfigPath ? ui->sweepConfigPath->text().trimmed() : QString();
+    if (path.isEmpty())
+    {
+        QMessageBox::warning(this, "Run Scenario", "Sweep JSON path is empty");
+        return;
+    }
+    QString error;
+    if (!saveSweepJsonToPath(path, &error))
+    {
+        QMessageBox::warning(this, "Run Scenario", error);
+        return;
+    }
+
+    QJsonDocument doc;
+    if (!parseSweepJsonText(&doc, &error))
+    {
+        QMessageBox::warning(this, "Run Scenario", error);
+        return;
+    }
+
+    sim::SweepConfig cfg;
+    if (!sim::LoadSweepConfig(path, &cfg, &error))
+    {
+        QMessageBox::warning(this, "Run Scenario", error);
+        return;
+    }
+
+    QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (outDir.isEmpty())
+        outDir = cfg.output_dir;
+    if (outDir.isEmpty())
+    {
+        QMessageBox::warning(this, "Run Scenario", "Output directory is empty");
+        return;
+    }
+
+    const QString cycleCsv = ui->cycleCsvPath ? ui->cycleCsvPath->text().trimmed() : QString();
+    const QString pythonExe = ui->pythonExePath ? ui->pythonExePath->text().trimmed() : QString();
+
+    RunOrchestrator::Plan plan;
+    plan.sweep_config_path = path;
+    plan.sweep_doc = doc;
+    plan.out_dir = outDir;
+    plan.cycle_csv = cycleCsv;
+    plan.python_exe = pythonExe;
+    plan.phi_source = doc.object().value("phi_source").toString();
+
+    const QString scenario = ui->scenarioPreset ? ui->scenarioPreset->currentText() : QString();
+    if (scenario == "Operating Point" || scenario == "FixedPointFreqSweep" || scenario == "Operating Map")
+    {
+        plan.do_sweep = true;
+    }
+    else if (scenario == "Driving Cycle")
+    {
+        plan.do_cycle = true;
+        plan.do_report = true;
+    }
+    else if (scenario == "Full Pipeline")
+    {
+        plan.do_sweep = true;
+        plan.do_lut = true;
+        plan.do_cycle = true;
+        plan.do_report = true;
+    }
+
+    if ((plan.do_cycle || plan.do_report) && cycleCsv.isEmpty())
+    {
+        QMessageBox::warning(this, "Run Scenario", "Cycle CSV is empty");
+        return;
+    }
+
+    sim::SweepContext ctx;
+    sim::PowerModuleParams moduleParams;
+    if (plan.do_sweep && !buildSweepContext(&ctx, &moduleParams, &error))
+    {
+        QMessageBox::warning(this, "Run Scenario", error);
+        return;
+    }
+
+    if (plan.do_sweep)
+    {
+        if (motor)
+            motor->Restart();
+        sim::SimInit init{};
+        init.motor = motor;
+        m_simRunner.Reset(init);
+    }
+
+    if (ui->runLog)
+        ui->runLog->clear();
+    if (ui->runProgress)
+        ui->runProgress->setValue(0);
+    if (ui->runStageLabel)
+        ui->runStageLabel->setText("Starting");
+
+    setRunUiEnabled(false);
+    refreshArtifacts(outDir);
+    appendRunLog(QString("Starting scenario: %1").arg(scenario));
+    m_runOrchestrator->start(plan, ctx);
+}
+
+void MainWindow::on_pbCancelRun_clicked()
+{
+    if (m_runOrchestrator && m_runOrchestrator->isRunning())
+    {
+        appendRunLog("Cancel requested");
+        m_runOrchestrator->cancel();
+    }
+}
+
+void MainWindow::on_pbOpenOutDir_clicked()
+{
+    const QString outDir = ui->sweepOutDir ? ui->sweepOutDir->text().trimmed() : QString();
+    if (outDir.isEmpty())
+        return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(outDir).absolutePath()));
+}
+
+void MainWindow::on_pbOpenArtifact_clicked()
+{
+    if (!ui || !ui->artifactList)
+        return;
+    QListWidgetItem* item = ui->artifactList->currentItem();
+    if (!item)
+        return;
+    const QString path = item->data(Qt::UserRole).toString();
+    if (path.isEmpty())
+        return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 

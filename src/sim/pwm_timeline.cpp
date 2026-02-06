@@ -34,7 +34,7 @@ struct LegWaveform
     }
 };
 
-static double ClampDutyToTon(double duty_norm, double period_s, double dead_s, double min_on_s, double min_off_s)
+static double ClampDutyToTonInternal(double duty_norm, double period_s, double dead_s, double min_on_s, double min_off_s)
 {
     const double d = std::clamp(duty_norm, 0.0, 1.0);
     double ton = std::clamp(d * period_s, 0.0, period_s);
@@ -63,7 +63,7 @@ static LegWaveform BuildLeg(double duty_norm, double period_s, double dead_s, do
     }
 
     const double dead = std::clamp(dead_s, 0.0, period_s * 0.49);
-    const double ton = ClampDutyToTon(duty_norm, period_s, dead, min_on_s, min_off_s);
+    const double ton = ClampDutyToTonInternal(duty_norm, period_s, dead, min_on_s, min_off_s);
     wf.dead = dead;
 
     if (ton <= 0.0)
@@ -96,6 +96,11 @@ static void AddTime(std::vector<double>& times, double t, double period_s)
     times.push_back(t);
 }
 } // namespace
+
+double ClampDutyToTon(double duty_norm, double period_s, double dead_s, double min_on_s, double min_off_s)
+{
+    return ClampDutyToTonInternal(duty_norm, period_s, dead_s, min_on_s, min_off_s);
+}
 
 std::vector<TimelineSegment> BuildCenterAlignedTimeline(const DutyCycles& duty,
                                                         double pwm_period_s,
@@ -155,4 +160,3 @@ std::vector<TimelineSegment> BuildCenterAlignedTimeline(const DutyCycles& duty,
     return segments;
 }
 } // namespace sim
-

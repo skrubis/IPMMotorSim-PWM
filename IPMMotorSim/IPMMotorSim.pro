@@ -34,6 +34,7 @@ INCLUDEPATH += $$PWD/stm32-sine/include
 INCLUDEPATH += $$PWD/stm32-sine/libopencm3/include
 INCLUDEPATH += $$PWD/stm32-sine/libopeninv/include
 INCLUDEPATH += $$PWD/../src
+INCLUDEPATH += $$PWD/../src/sim
 
 SOURCES += \
         main.cpp \
@@ -54,9 +55,20 @@ SOURCES += \
     stm32-sine/src/pwmgeneration.cpp \
     idiqgraph.cpp \
     terminal_stubs.cpp \
+    run_orchestrator.cpp \
+    scenario_window.cpp \
     ../src/sim/controller.cpp \
     ../src/sim/modulator.cpp \
-    ../src/sim/inverter_switching_model.cpp
+    ../src/sim/modulator_diagnostics.cpp \
+    ../src/sim/inverter_switching_model.cpp \
+    ../src/sim/metrics/metric_pack.cpp \
+    ../src/sim/util/process_utils.cpp \
+    ../src/sim/sweep/sweep_config.cpp \
+    ../src/sim/sweep/sweep_runner.cpp \
+    ../src/sim/sim_runner.cpp \
+    ../src/sim/strategy/strategy_supervisor.cpp \
+    ../src/sim/strategy/strategy_spec.cpp \
+    ../src/sim/lut/lut_builder.cpp
 
 HEADERS += \
         mainwindow.h \
@@ -67,14 +79,26 @@ HEADERS += \
     stm32-sine/include/pwmgeneration.h \
     teststubs.h \
     idiqgraph.h \
+    run_orchestrator.h \
+    scenario_window.h \
     ../src/sim/controller.h \
     ../src/sim/modulator.h \
+    ../src/sim/modulator_diagnostics.h \
     ../src/sim/inverter_switching_model.h \
+    ../src/sim/metrics/metric_pack.h \
+    ../src/sim/util/process_utils.h \
+    ../src/sim/sweep/sweep_config.h \
+    ../src/sim/sweep/sweep_runner.h \
+    ../src/sim/sim_runner.h \
+    ../src/sim/strategy/strategy_supervisor.h \
+    ../src/sim/strategy/strategy_spec.h \
+    ../src/sim/lut/lut_builder.h \
     ../src/sim/motor_plant.h \
     ../src/sim/mechanical_load.h
 
 FORMS += \
-        mainwindow.ui
+        mainwindow.ui \
+        scenario_window.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

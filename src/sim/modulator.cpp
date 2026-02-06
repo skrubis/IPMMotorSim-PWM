@@ -62,6 +62,16 @@ DutyCycles Modulator::ComputeFromAlphaBeta(double v_alpha, double v_beta, double
             clampMin = (sector % 2) == 1;
             clampMax = !clampMin;
             break;
+        case ModulationMode::DPWM2:
+        case ModulationMode::DPWM3:
+        {
+            const double shift = (mode == ModulationMode::DPWM2) ? (-pi / 6.0) : 0.0;
+            const double harmonic = (mode == ModulationMode::DPWM3) ? 6.0 : 3.0;
+            const double sel = std::sin(harmonic * (theta - shift));
+            clampMax = (sel >= 0.0);
+            clampMin = !clampMax;
+            break;
+        }
         case ModulationMode::SVPWM:
         case ModulationMode::Firmware:
         default:

@@ -26,6 +26,7 @@ class MotorModel
 {
 public:
     MotorModel(double wheelSize,double ratio,double roadGradient,double mass,double Lq,double Ld,double Rs,double poles,double fluxLink,double timestep, double syncDelay, double sampPoint);
+    enum class OperatingMode { Dynamic, ClampedSpeed };
     void Step(double Va, double Vb, double Vc);
     void Restart(void);
     void setWheelSize(double val) {m_WheelSize = val;}
@@ -43,6 +44,10 @@ public:
     void setRoadGradient(double val) {m_RoadGradient = val;}
     void setMotorFrequency(double hz);
     void setMotorRpm(double rpm);
+    void setOperatingMode(OperatingMode mode) { m_operatingMode = mode; }
+    OperatingMode getOperatingMode() const { return m_operatingMode; }
+    void setClampedSpeedHz(double hz) { m_clampedFrequency = hz; }
+    void setClampedSpeedRpm(double rpm) { m_clampedFrequency = rpm / 60.0; }
     double getMotorPosition(void);
     double getElecPosition(void);
     double getMotorFreq(void) {return m_Frequency;}
@@ -100,6 +105,9 @@ private:
     double m_Vd_dueto_Rd;
     double m_VLd;
     double m_VLq;
+
+    OperatingMode m_operatingMode = OperatingMode::Dynamic;
+    double m_clampedFrequency = 0.0;
 };
 
 #endif // MOTORMODEL_H

@@ -22,6 +22,12 @@ struct TimelineSegment
     std::array<LegGateState, 3> leg{{LegGateState::LsOn, LegGateState::LsOn, LegGateState::LsOn}};
 };
 
+double ClampDutyToTon(double duty_norm,
+                      double period_s,
+                      double dead_s,
+                      double min_on_s = 0.0,
+                      double min_off_s = 0.0);
+
 std::vector<TimelineSegment> BuildCenterAlignedTimeline(const DutyCycles& duty,
                                                         double pwm_period_s,
                                                         double deadtime_s,
@@ -30,4 +36,3 @@ std::vector<TimelineSegment> BuildCenterAlignedTimeline(const DutyCycles& duty,
 } // namespace sim
 
 #endif // SIM_PWM_TIMELINE_H
-

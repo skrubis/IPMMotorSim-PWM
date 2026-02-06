@@ -50,20 +50,20 @@
     PARAM_ENTRY(CAT_MOTOR,   fslipconstmax,"Hz",     0,      10,     5,      100 )
 
 #define MOTOR_PARAMETERS_FOC \
-    PARAM_ENTRY(CAT_MOTOR,   iqkp,        "",        0,      20000,  32,     107 ) \
+    PARAM_ENTRY(CAT_MOTOR,   iqkp,        "",        0,      20000,  700,    107 ) \
     PARAM_ENTRY(CAT_MOTOR,   idkp,        "",        0,      20000,  32,     149 ) \
-    PARAM_ENTRY(CAT_MOTOR,   curki,       "",        0,      100000, 20000,  108 ) \
+    PARAM_ENTRY(CAT_MOTOR,   curki,       "",        0,      100000, 4000,   108 ) \
     PARAM_ENTRY(CAT_MOTOR,   exckp,       "",        0,      20000,  3000,   162 ) \
     PARAM_ENTRY(CAT_MOTOR,   cogkp,       "",        -1000,  1000,   0,      159 ) \
     PARAM_ENTRY(CAT_MOTOR,   cogph,       "",        0,      65535,  0,      160 ) \
     PARAM_ENTRY(CAT_MOTOR,   cogmax,       "",       0,      30000,  0,      161 ) \
-    PARAM_ENTRY(CAT_MOTOR,   vlimflt,     "",        0,      16,     10,     145 ) \
-    PARAM_ENTRY(CAT_MOTOR,   vlimmargin,  "dig",     0,      10000,  2500,   141 ) \
-    PARAM_ENTRY(CAT_MOTOR,   fwcurmax,    "A",       -1000,  0,     -100,    144 ) \
+    PARAM_ENTRY(CAT_MOTOR,   vlimflt,     "",        0,      16,     11,     145 ) \
+    PARAM_ENTRY(CAT_MOTOR,   vlimmargin,  "dig",     0,      10000,  2000,   141 ) \
+    PARAM_ENTRY(CAT_MOTOR,   fwcurmax,    "A",       -1000,  0,     -80,     144 ) \
     PARAM_ENTRY(CAT_MOTOR,   excurmax,    "A",       0,      10,     0,      163 ) \
     PARAM_ENTRY(CAT_MOTOR,   syncofs,     "dig",     0,      65535,  0,      70  ) \
-    PARAM_ENTRY(CAT_MOTOR,   lqminusld,   "mH",      0,      1000,   0,      139 ) \
-    PARAM_ENTRY(CAT_MOTOR,   fluxlinkage, "mWeber",  0,      1000,   90,     140 ) \
+    PARAM_ENTRY(CAT_MOTOR,   lqminusld,   "mH",      0,      1000,   2,      139 ) \
+    PARAM_ENTRY(CAT_MOTOR,   fluxlinkage, "mWeber",  0,      1000,   200,    140 ) \
     PARAM_ENTRY(CAT_MOTOR,   syncadv,     "dig/Hz",  0,      65535,  10,     133 ) \
 
 #define INVERTER_PARAMETERS_COMMON \

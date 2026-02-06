@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "mode": "FixedPointFreqSweep",
+  "baseline": "SVPWM",
+  "candidates": [
+    "SVPWM",
+    "DPWMMIN",
+    "DPWMMAX",
+    "DPWM0",
+    "DPWM1",
+    "DPWM2",
+    "DPWM3",
+    "AUTO_RULE",
+    "AUTO_PRED"
+  ],
+  "point": {
+    "Vdc_V": 350,
+    "temp_C": 25,
+    "speed_rpm": 3000,
+    "iq_A": 60,
+    "id_A": 0
+  },
+  "f_sw_Hz": [4400, 8800, 17600],
+  "settle_ms": 300,
+  "measure_ms": 500,
+  "constraints": {
+    "thd_max_pct": -1,
+    "i_ripple_rms_max_a": -1,
+    "min_pulse_margin_min_s": 0.0
+  },
+  "min_pulse_s": -1
+}
