@@ -100,6 +100,15 @@ def build_loss_tables(rows, phi_source, phi_min, phi_max, phi_bins, speed_bins, 
             thd = float(row.get("thd_a_pct", "nan")) if row.get("thd_a_pct") not in (None, "") else math.nan
         except ValueError:
             continue
+        invalid = row.get("invalid")
+        if invalid not in (None, ""):
+            try:
+                if int(float(invalid)) != 0:
+                    continue
+            except Exception:
+                pass
+        if not math.isfinite(loss):
+            continue
 
         phi_deg = get_phi(row)
         if not math.isfinite(phi_deg):
@@ -152,6 +161,15 @@ def build_value_table(rows, phi_source, phi_min, phi_max, phi_bins, speed_bins, 
             value = float(row.get(key, "nan"))
         except ValueError:
             continue
+        invalid = row.get("invalid")
+        if invalid not in (None, ""):
+            try:
+                if int(float(invalid)) != 0:
+                    continue
+            except Exception:
+                pass
+        if not math.isfinite(value):
+            continue
 
         phi_deg = get_phi(row)
         if not math.isfinite(phi_deg):
@@ -196,6 +214,15 @@ def build_metric_table(rows, phi_source, phi_min, phi_max, phi_bins, speed_bins,
             iq = float(row.get("iq_A", "nan"))
             value = float(row.get(key, "nan"))
         except ValueError:
+            continue
+        invalid = row.get("invalid")
+        if invalid not in (None, ""):
+            try:
+                if int(float(invalid)) != 0:
+                    continue
+            except Exception:
+                pass
+        if not math.isfinite(value):
             continue
 
         phi_deg = get_phi(row)

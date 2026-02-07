@@ -134,6 +134,15 @@ def build_loss_table(rows, phi_source, phi_min, phi_max, phi_bins, speed_bins, i
             continue
         if str(mode).lower().startswith("auto"):
             continue
+        invalid = row.get("invalid")
+        if invalid not in (None, ""):
+            try:
+                if int(float(invalid)) != 0:
+                    continue
+            except Exception:
+                pass
+        if not math.isfinite(loss):
+            continue
 
         phi_deg = get_phi(row)
         if not math.isfinite(phi_deg):
@@ -187,6 +196,15 @@ def build_auto_table(rows, phi_source, phi_min, phi_max, phi_bins, speed_bins, i
             iq = float(row.get("iq_A", "nan"))
             loss = float(row.get("avg_total_w", "nan"))
         except ValueError:
+            continue
+        invalid = row.get("invalid")
+        if invalid not in (None, ""):
+            try:
+                if int(float(invalid)) != 0:
+                    continue
+            except Exception:
+                pass
+        if not math.isfinite(loss):
             continue
 
         phi_deg = get_phi(row)

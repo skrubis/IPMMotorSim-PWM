@@ -121,6 +121,14 @@ static ThdMode ParseThdMode(const QString& text)
     return ThdMode::ControlStepProxy;
 }
 
+static IdMode ParseIdMode(const QString& text)
+{
+    const QString t = text.trimmed().toLower();
+    if (t == "fw_auto" || t == "fw" || t == "auto")
+        return IdMode::FwAuto;
+    return IdMode::Manual;
+}
+
 static double ReadConstraintDouble(const QJsonObject& obj, const QStringList& keys, double fallback)
 {
     for (const QString& key : keys)
@@ -250,6 +258,17 @@ bool LoadSweepConfig(const QString& path, SweepConfig* out, QString* error)
 
     cfg.thd_mode = ParseThdMode(root.value("thd_mode").toString("control_step_proxy"));
     cfg.thd_samples = root.value("thd_samples").toInt(cfg.thd_samples);
+
+    if (root.contains("id_mode"))
+        cfg.id_mode = ParseIdMode(root.value("id_mode").toString());
+    else
+        cfg.id_mode = (cfg.mode == SweepMode::OperatingMapSweep) ? IdMode::FwAuto : IdMode::Manual;
+
+    cfg.i_hard_max_A = root.value("i_hard_max_A").toDouble(cfg.i_hard_max_A);
+    cfg.p_hard_max_W = root.value("p_hard_max_W").toDouble(cfg.p_hard_max_W);
+    cfg.v_sat_frac_limit = root.value("v_sat_frac_limit").toDouble(cfg.v_sat_frac_limit);
+    cfg.v_sat_frac_pct = root.value("v_sat_frac_pct").toDouble(cfg.v_sat_frac_pct);
+
     cfg.output_dir = root.value("output_dir").toString();
     cfg.write_point_json = root.value("write_point_json").toBool(cfg.write_point_json);
     cfg.write_summary_csv = root.value("write_summary_csv").toBool(cfg.write_summary_csv);

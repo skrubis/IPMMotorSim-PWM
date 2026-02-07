@@ -257,7 +257,7 @@ TEST(ConstraintExportCanonicalKeys)
     cfg.id_A.values = {0.0};
     cfg.vdc_V.values = {400.0};
     cfg.temp_C.values = {25.0};
-    cfg.f_sw_Hz.values = {8000.0};
+    cfg.f_sw_Hz.values = {8800.0};
     cfg.settle_ms = 0.0;
     cfg.measure_ms = 1.0;
     cfg.pole_pairs = 4;
@@ -279,7 +279,7 @@ TEST(ConstraintExportCanonicalKeys)
     ctx.motor = &motor;
     ctx.base_inputs.timestep_s = 1e-4;
     ctx.base_inputs.vdc_V = 400.0;
-    ctx.base_inputs.inv_params.pwm_frequency_hz = 8000.0;
+    ctx.base_inputs.inv_params.pwm_frequency_hz = 8800.0;
     ctx.base_inputs.inv_params.deadtime_s = 2e-6;
     ctx.base_inputs.inv_params.min_on_s = 0.0;
     ctx.base_inputs.inv_params.min_off_s = 0.0;

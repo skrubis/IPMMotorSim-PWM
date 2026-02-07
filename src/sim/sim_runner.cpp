@@ -51,6 +51,71 @@ RunResult SimRunner::Run(const SimInputs& inputs, const RunSpec& settle, const R
     inverter.SetModuleParams(inputs.module_params);
     inverter.ResetThermals(inv_params.sink_temp_C);
 
+    int measure_steps_seen = 0;
+    int v_sat_high_count = 0;
+
+    auto updateValidity = [&](const StepSnapshot& snapshot)
+    {
+        if (!inputs.check_validity || !result.validity.valid)
+            return;
+
+        const double ia = snapshot.phase_currents.a;
+        const double ib = snapshot.phase_currents.b;
+        const double ic = snapshot.phase_currents.c;
+        const double id = snapshot.motor.id;
+        const double iq = snapshot.motor.iq;
+        const double power = snapshot.elec_power_w;
+        const double loss = snapshot.inv_loss.total_W;
+
+        if (!std::isfinite(ia) || !std::isfinite(ib) || !std::isfinite(ic) ||
+            !std::isfinite(id) || !std::isfinite(iq) ||
+            !std::isfinite(power) || !std::isfinite(loss))
+        {
+            result.validity.valid = false;
+            result.validity.reason = "NAN_INF";
+            return;
+        }
+
+        const double max_abs_i = std::max({std::abs(ia), std::abs(ib), std::abs(ic)});
+        const double max_abs_idq = std::max(std::abs(id), std::abs(iq));
+        result.validity.max_abs_i_abc = std::max(result.validity.max_abs_i_abc, max_abs_i);
+        result.validity.max_abs_idq = std::max(result.validity.max_abs_idq, max_abs_idq);
+        result.validity.max_abs_power_w = std::max(result.validity.max_abs_power_w,
+                                                   std::max(std::abs(power), std::abs(loss)));
+
+        const double vdc = inputs.vdc_V;
+        if (vdc > 0.0)
+        {
+            const double vd = snapshot.controller.vd_ctrl;
+            const double vq = snapshot.controller.vq_ctrl;
+            const double v_mag = std::sqrt(vd * vd + vq * vq);
+            const double v_lim = vdc / 1.7320508075688772;
+            if (v_lim > 0.0)
+            {
+                const double v_sat_frac = v_mag / v_lim;
+                result.validity.v_sat_frac_max = std::max(result.validity.v_sat_frac_max, v_sat_frac);
+                if (v_sat_frac >= inputs.validity_limits.v_sat_frac_limit)
+                    ++v_sat_high_count;
+            }
+        }
+
+        if (inputs.validity_limits.i_hard_max_A > 0.0 &&
+            result.validity.max_abs_i_abc > inputs.validity_limits.i_hard_max_A)
+        {
+            result.validity.valid = false;
+            result.validity.reason = "CURRENT_BLOWUP";
+            return;
+        }
+
+        if (inputs.validity_limits.p_hard_max_W > 0.0 &&
+            result.validity.max_abs_power_w > inputs.validity_limits.p_hard_max_W)
+        {
+            result.validity.valid = false;
+            result.validity.reason = "POWER_BLOWUP";
+            return;
+        }
+    };
+
     auto runSteps = [&](int steps, bool emitHooks)
     {
         for (int i = 0; i < steps; ++i)
@@ -64,6 +129,13 @@ RunResult SimRunner::Run(const SimInputs& inputs, const RunSpec& settle, const R
             const int step_index = result.steps_total;
             StepSnapshot snapshot = StepOnce(step_index, inputs, controller, modulator, inverter, inv_params);
             ++result.steps_total;
+            if (emitHooks)
+            {
+                ++measure_steps_seen;
+                updateValidity(snapshot);
+                if (inputs.check_validity && !result.validity.valid)
+                    return false;
+            }
             if (emitHooks && hooks.on_step)
                 hooks.on_step(snapshot);
         }
@@ -73,7 +145,35 @@ RunResult SimRunner::Run(const SimInputs& inputs, const RunSpec& settle, const R
     if (!runSteps(std::max(0, settle.steps), false))
         return result;
     if (!runSteps(std::max(0, measure.steps), true))
+    {
+        if (inputs.check_validity && !result.validity.valid)
+        {
+            if (measure_steps_seen > 0)
+            {
+                result.validity.v_sat_frac_pct =
+                    100.0 * static_cast<double>(v_sat_high_count) / static_cast<double>(measure_steps_seen);
+                if (result.validity.v_sat_frac_pct >= inputs.validity_limits.v_sat_frac_pct &&
+                    result.validity.max_abs_i_abc > 0.5 * inputs.validity_limits.i_hard_max_A)
+                {
+                    result.validity.reason = "V_SAT_TOO_HIGH";
+                }
+            }
+            return result;
+        }
         return result;
+    }
+
+    if (measure_steps_seen > 0)
+    {
+        result.validity.v_sat_frac_pct =
+            100.0 * static_cast<double>(v_sat_high_count) / static_cast<double>(measure_steps_seen);
+        if (result.validity.v_sat_frac_pct >= inputs.validity_limits.v_sat_frac_pct &&
+            result.validity.max_abs_i_abc > 0.5 * inputs.validity_limits.i_hard_max_A)
+        {
+            result.validity.valid = false;
+            result.validity.reason = "V_SAT_TOO_HIGH";
+        }
+    }
 
     return result;
 }

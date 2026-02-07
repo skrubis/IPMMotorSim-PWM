@@ -99,6 +99,45 @@ static bool EnsureDir(const QString& path)
     return dir.mkpath(".");
 }
 
+static bool MapPwmFrequencyToParam(double f_sw_hz, int* pwmfrq_param)
+{
+    if (!pwmfrq_param)
+        return false;
+    if (std::abs(f_sw_hz - 17600.0) <= 1e-6)
+    {
+        *pwmfrq_param = 0;
+        return true;
+    }
+    if (std::abs(f_sw_hz - 8800.0) <= 1e-6)
+    {
+        *pwmfrq_param = 1;
+        return true;
+    }
+    if (std::abs(f_sw_hz - 4400.0) <= 1e-6)
+    {
+        *pwmfrq_param = 2;
+        return true;
+    }
+    return false;
+}
+
+static bool ApplyOiPwmProfile(double f_sw_hz, SimInputs* inputs, QString* error)
+{
+    if (!inputs || f_sw_hz <= 0.0)
+        return true;
+    int pwmfrq_param = 1;
+    if (!MapPwmFrequencyToParam(f_sw_hz, &pwmfrq_param))
+    {
+        if (error)
+            *error = QString("Unsupported PWM frequency. Allowed: 4400, 8800, 17600 Hz. Invalid: %1.").arg(f_sw_hz);
+        return false;
+    }
+    Param::Set(Param::pwmfrq, FP_FROMINT(pwmfrq_param));
+    inputs->inv_params.pwm_frequency_hz = f_sw_hz;
+    inputs->timestep_s = 1.0 / f_sw_hz;
+    return true;
+}
+
 static QJsonObject MetricPackToJson(const MetricPack& m)
 {
     QJsonObject obj;
@@ -379,6 +418,8 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                      "clamp_frac_a,clamp_frac_b,clamp_frac_c,"
                      "constraint_ok,constraint_thd_ok,constraint_ripple_ok,constraint_pulse_ok,"
                      "thd_max_pct,i_ripple_rms_max_a,min_pulse_margin_min_s,"
+                     "invalid,invalid_reason,max_abs_i_abc,max_abs_idq,max_abs_power_w,v_sat_frac_max,v_sat_frac_pct,"
+                     "id_mean_A,id_rms_A,id_min_A,id_max_A,iq_mean_A,iq_rms_A,iq_min_A,iq_max_A,"
                      "auto_switch_count,auto_primary_mode,auto_primary_frac,auto_svpwm_frac,auto_dpwm1_frac,auto_dpwmmax_frac,"
                      "avg_igbt_cond_w,avg_diode_cond_w,avg_igbt_sw_w,avg_diode_rr_w,avg_total_w,avg_inv_eff_pct,"
                      "samples\n";
@@ -414,6 +455,14 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
             }
             const double min_pulse_s_effective = inputs.inv_params.min_on_s;
 
+            inputs.validity_limits.i_hard_max_A = cfg.i_hard_max_A;
+            inputs.validity_limits.p_hard_max_W = cfg.p_hard_max_W;
+            inputs.validity_limits.v_sat_frac_limit = cfg.v_sat_frac_limit;
+            inputs.validity_limits.v_sat_frac_pct = cfg.v_sat_frac_pct;
+
+            if (!ApplyOiPwmProfile(inputs.inv_params.pwm_frequency_hz, &inputs, error))
+                return false;
+
             const double elec_freq_hz = (poles > 0) ? (std::abs(point.speed_rpm) / 60.0) * poles : 0.0;
             int settle_steps = 0;
             int measure_steps = 0;
@@ -427,7 +476,10 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                 measure_steps = 1;
 
             Param::Set(Param::manualiq, FP_FROMFLT(static_cast<float>(point.iq_A)));
-            Param::Set(Param::manualid, FP_FROMFLT(static_cast<float>(point.id_A)));
+            if (cfg.id_mode == IdMode::Manual)
+                Param::Set(Param::manualid, FP_FROMFLT(static_cast<float>(point.id_A)));
+            else
+                Param::Set(Param::manualid, FP_FROMFLT(0.0f));
             PwmGeneration::SetOpmode(0);
             PwmGeneration::SetOpmode(2);
 
@@ -462,6 +514,19 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
             } dbg;
             bool dbg_bad_loss = false;
             int dbg_bad_step = -1;
+
+            struct IdIqStats
+            {
+                double sum_id = 0.0;
+                double sum_iq = 0.0;
+                double sum_id_sq = 0.0;
+                double sum_iq_sq = 0.0;
+                double min_id = std::numeric_limits<double>::infinity();
+                double max_id = -std::numeric_limits<double>::infinity();
+                double min_iq = std::numeric_limits<double>::infinity();
+                double max_iq = -std::numeric_limits<double>::infinity();
+                int samples = 0;
+            } idiq_stats;
 
             StrategySupervisor supervisor;
             ModulationMode current_mode = inputs.mod_mode;
@@ -570,6 +635,15 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                     dbg.sum_iq += snap.motor.iq;
                     dbg.sum_elec_power_w += snap.elec_power_w;
                     ++dbg.samples;
+                    idiq_stats.sum_id += snap.motor.id;
+                    idiq_stats.sum_iq += snap.motor.iq;
+                    idiq_stats.sum_id_sq += snap.motor.id * snap.motor.id;
+                    idiq_stats.sum_iq_sq += snap.motor.iq * snap.motor.iq;
+                    idiq_stats.min_id = std::min(idiq_stats.min_id, snap.motor.id);
+                    idiq_stats.max_id = std::max(idiq_stats.max_id, snap.motor.id);
+                    idiq_stats.min_iq = std::min(idiq_stats.min_iq, snap.motor.iq);
+                    idiq_stats.max_iq = std::max(idiq_stats.max_iq, snap.motor.iq);
+                    ++idiq_stats.samples;
                     if (snap.elec_power_w > 1e-6)
                     {
                         const double inv_eff = 100.0 * (snap.elec_power_w / (snap.elec_power_w + total));
@@ -648,51 +722,46 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                 pointResult.samples = loss_samples;
             }
 
-            // Physics sanity guard: huge/invalid loss values usually indicate a unit/step bug or instability.
-            // Fail early with debug context instead of generating nonsense ROI numbers.
-            if (dbg_bad_loss || !std::isfinite(pointResult.avg_total_w) || pointResult.avg_total_w > 1e6)
-            {
-                const double dt_s = inputs.timestep_s;
-                const double loop_freq_hz = dt_s > 0.0 ? (1.0 / dt_s) : 0.0;
-                const double pwm_freq_hz = inputs.inv_params.pwm_frequency_hz;
-                const double meas_time_s = dt_s * static_cast<double>(measure_steps);
-                const double inv_dbg = (dbg.samples > 0) ? (1.0 / static_cast<double>(dbg.samples)) : 0.0;
-                const double mean_abs_ia = dbg.sum_abs_i_a * inv_dbg;
-                const double mean_abs_ib = dbg.sum_abs_i_b * inv_dbg;
-                const double mean_abs_ic = dbg.sum_abs_i_c * inv_dbg;
-                const double mean_id = dbg.sum_id * inv_dbg;
-                const double mean_iq = dbg.sum_iq * inv_dbg;
-                const double mean_elec_p = dbg.sum_elec_power_w * inv_dbg;
+            const RunResult::PointValidity validity = result.validity;
+            bool invalid = dbg_bad_loss || !validity.valid;
+            QString invalid_reason = QString::fromStdString(validity.reason);
+            if (dbg_bad_loss && invalid_reason.isEmpty())
+                invalid_reason = "LOSS_NAN_INF";
+            invalid_reason.replace(',', ';');
 
-                if (error)
-                {
-                    *error = QString("Sanity guard: avg_total_w=%1 W (samples=%2) exceeded limit or invalid.\n"
-                                     "Debug (measure window): loop_freq_hz=%3, pwm_freq_hz=%4, dt_s=%5, settle_steps=%6, measure_steps=%7, meas_time_s=%8.\n"
-                                     "Currents: mean(|ia|,|ib|,|ic|)=(%9,%10,%11) A; mean(id,iq)=(%12,%13) A.\n"
-                                     "Loss components: avg_igbt_cond=%14 W, avg_diode_cond=%15 W, avg_igbt_sw=%16 W, avg_diode_rr=%17 W.\n"
-                                     "Mean electrical power estimate=%18 W.\n"
-                                     "First bad step=%19")
-                                 .arg(pointResult.avg_total_w, 0, 'g', 6)
-                                 .arg(pointResult.samples)
-                                 .arg(loop_freq_hz, 0, 'g', 8)
-                                 .arg(pwm_freq_hz, 0, 'g', 8)
-                                 .arg(dt_s, 0, 'g', 8)
-                                 .arg(settle_steps)
-                                 .arg(measure_steps)
-                                 .arg(meas_time_s, 0, 'g', 8)
-                                 .arg(mean_abs_ia, 0, 'g', 6)
-                                 .arg(mean_abs_ib, 0, 'g', 6)
-                                 .arg(mean_abs_ic, 0, 'g', 6)
-                                 .arg(mean_id, 0, 'g', 6)
-                                 .arg(mean_iq, 0, 'g', 6)
-                                 .arg(pointResult.avg_igbt_cond_w, 0, 'g', 6)
-                                 .arg(pointResult.avg_diode_cond_w, 0, 'g', 6)
-                                 .arg(pointResult.avg_igbt_sw_w, 0, 'g', 6)
-                                 .arg(pointResult.avg_diode_rr_w, 0, 'g', 6)
-                                 .arg(mean_elec_p, 0, 'g', 6)
-                                 .arg(dbg_bad_step);
-                }
-                return false;
+            double id_mean = std::numeric_limits<double>::quiet_NaN();
+            double id_rms = std::numeric_limits<double>::quiet_NaN();
+            double id_min = std::numeric_limits<double>::quiet_NaN();
+            double id_max = std::numeric_limits<double>::quiet_NaN();
+            double iq_mean = std::numeric_limits<double>::quiet_NaN();
+            double iq_rms = std::numeric_limits<double>::quiet_NaN();
+            double iq_min = std::numeric_limits<double>::quiet_NaN();
+            double iq_max = std::numeric_limits<double>::quiet_NaN();
+            if (idiq_stats.samples > 0)
+            {
+                const double inv = 1.0 / static_cast<double>(idiq_stats.samples);
+                id_mean = idiq_stats.sum_id * inv;
+                iq_mean = idiq_stats.sum_iq * inv;
+                id_rms = std::sqrt(std::max(0.0, idiq_stats.sum_id_sq * inv));
+                iq_rms = std::sqrt(std::max(0.0, idiq_stats.sum_iq_sq * inv));
+                id_min = idiq_stats.min_id;
+                id_max = idiq_stats.max_id;
+                iq_min = idiq_stats.min_iq;
+                iq_max = idiq_stats.max_iq;
+            }
+
+            if (invalid)
+            {
+                pointResult.constraint_ok = false;
+                pointResult.constraint_thd_ok = false;
+                pointResult.constraint_ripple_ok = false;
+                pointResult.constraint_pulse_ok = false;
+                pointResult.avg_igbt_cond_w = std::numeric_limits<double>::quiet_NaN();
+                pointResult.avg_diode_cond_w = std::numeric_limits<double>::quiet_NaN();
+                pointResult.avg_igbt_sw_w = std::numeric_limits<double>::quiet_NaN();
+                pointResult.avg_diode_rr_w = std::numeric_limits<double>::quiet_NaN();
+                pointResult.avg_total_w = std::numeric_limits<double>::quiet_NaN();
+                pointResult.avg_inv_eff_pct = std::numeric_limits<double>::quiet_NaN();
             }
             if (out)
                 out->points.push_back(pointResult);
@@ -752,6 +821,21 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                           << cfg.thd_max_pct << ","
                           << cfg.i_ripple_rms_max_a << ","
                           << cfg.min_pulse_margin_min_s << ","
+                          << (invalid ? 1 : 0) << ","
+                          << invalid_reason << ","
+                          << validity.max_abs_i_abc << ","
+                          << validity.max_abs_idq << ","
+                          << validity.max_abs_power_w << ","
+                          << validity.v_sat_frac_max << ","
+                          << validity.v_sat_frac_pct << ","
+                          << id_mean << ","
+                          << id_rms << ","
+                          << id_min << ","
+                          << id_max << ","
+                          << iq_mean << ","
+                          << iq_rms << ","
+                          << iq_min << ","
+                          << iq_max << ","
                           << (StrategyIsAuto(strategy) ? auto_summary.switch_count : 0) << ","
                           << (StrategyIsAuto(strategy) ? ModeToString(auto_summary.primary_mode) : QString()) << ","
                           << (StrategyIsAuto(strategy) ? auto_summary.primary_frac : 0.0) << ","
@@ -790,6 +874,25 @@ bool RunSweep(const SweepConfig& cfg, const SweepContext& ctx, SweepResult* out,
                 constraintsObj.insert("min_pulse_margin_min_s", cfg.min_pulse_margin_min_s);
                 root.insert("constraints", constraintsObj);
                 root.insert("min_pulse_s_effective", min_pulse_s_effective);
+                QJsonObject validityObj;
+                validityObj.insert("valid", !invalid);
+                validityObj.insert("reason", invalid_reason);
+                validityObj.insert("max_abs_i_abc", validity.max_abs_i_abc);
+                validityObj.insert("max_abs_idq", validity.max_abs_idq);
+                validityObj.insert("max_abs_power_w", validity.max_abs_power_w);
+                validityObj.insert("v_sat_frac_max", validity.v_sat_frac_max);
+                validityObj.insert("v_sat_frac_pct", validity.v_sat_frac_pct);
+                root.insert("validity", validityObj);
+                QJsonObject idObj;
+                idObj.insert("id_mean_A", id_mean);
+                idObj.insert("id_rms_A", id_rms);
+                idObj.insert("id_min_A", id_min);
+                idObj.insert("id_max_A", id_max);
+                idObj.insert("iq_mean_A", iq_mean);
+                idObj.insert("iq_rms_A", iq_rms);
+                idObj.insert("iq_min_A", iq_min);
+                idObj.insert("iq_max_A", iq_max);
+                root.insert("id_iq_stats", idObj);
                 if (StrategyIsAuto(strategy))
                 {
                     QJsonObject autoObj;

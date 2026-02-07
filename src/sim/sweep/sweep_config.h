@@ -15,6 +15,12 @@ enum class SweepMode
     FixedPointFreqSweep
 };
 
+enum class IdMode
+{
+    Manual,
+    FwAuto
+};
+
 struct SweepAxis
 {
     std::vector<double> values;
@@ -51,6 +57,13 @@ struct SweepConfig
 
     ThdMode thd_mode = ThdMode::ControlStepProxy;
     int thd_samples = 2048;
+
+    IdMode id_mode = IdMode::Manual;
+
+    double i_hard_max_A = 2000.0;
+    double p_hard_max_W = 2.0e6;
+    double v_sat_frac_limit = 0.95;
+    double v_sat_frac_pct = 50.0;
 
     QString output_dir;
     bool write_point_json = true;

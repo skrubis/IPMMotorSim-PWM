@@ -53,6 +53,15 @@ struct SimInputs
     PowerModuleParams module_params;
     MotorModel::OperatingMode operating_mode = MotorModel::OperatingMode::Dynamic;
     double clamped_speed_rpm = 0.0;
+
+    struct ValidityLimits
+    {
+        double i_hard_max_A = 2000.0;
+        double p_hard_max_W = 2.0e6;
+        double v_sat_frac_limit = 0.95;
+        double v_sat_frac_pct = 50.0;
+    } validity_limits;
+    bool check_validity = true;
 };
 
 struct RunSpec
@@ -122,6 +131,17 @@ struct RunResult
     int steps_total = 0;
     bool ok = true;
     std::string error;
+
+    struct PointValidity
+    {
+        bool valid = true;
+        std::string reason;
+        double max_abs_i_abc = 0.0;
+        double max_abs_idq = 0.0;
+        double max_abs_power_w = 0.0;
+        double v_sat_frac_max = 0.0;
+        double v_sat_frac_pct = 0.0;
+    } validity;
 };
 
 class SimRunner

@@ -307,6 +307,7 @@ bool BuildLutFromSummaryCsv(const QString& summary_csv_path,
     const int c_mode = colIndex("mode");
     const int c_loss = colIndex("avg_total_w");
     const int c_ok = colIndex("constraint_ok");
+    const int c_invalid = colIndex("invalid");
     const int c_thd_max = colIndex("thd_max_pct");
     const int c_ripple_max = colIndex("i_ripple_rms_max_a");
     const int c_pulse_min = colIndex("min_pulse_margin_min_s");
@@ -340,6 +341,14 @@ bool BuildLutFromSummaryCsv(const QString& summary_csv_path,
         row.strategy = ParseStrategy(fields[c_mode]);
         row.loss_w = fields[c_loss].toDouble();
         row.constraint_ok = fields[c_ok].toInt() != 0;
+
+        if (c_invalid >= 0 && c_invalid < static_cast<int>(fields.size()))
+        {
+            if (fields[c_invalid].toInt() != 0)
+                continue;
+        }
+        if (!std::isfinite(row.loss_w))
+            continue;
 
         if (c_thd_max >= 0 && c_thd_max < static_cast<int>(fields.size()))
             UpdateScalar(constraints.thd_max_pct, fields[c_thd_max].toDouble(), 1e-9, &warnings, "thd_max_pct");
